@@ -349,15 +349,28 @@ function lyricsEditorBox() {
     document.execCommand('insertText', false, e.clipboardData.getData('text/plain'));
   });
 
+  // На телефоне нажатие на кнопку может сбросить выделение — запоминаем его заранее.
+  let savedRange = null;
+  document.addEventListener('selectionchange', () => {
+    const sel = getSelection();
+    if (sel.rangeCount && area.contains(sel.anchorNode)) savedRange = sel.getRangeAt(0).cloneRange();
+  });
   const cmd = (name, value) => {
     area.focus();
+    if (savedRange) {
+      const sel = getSelection();
+      sel.removeAllRanges();
+      sel.addRange(savedRange);
+    }
     document.execCommand('styleWithCSS', false, name === 'hiliteColor');
     document.execCommand(name, false, value);
   };
   // mousedown + preventDefault — чтобы кнопка не снимала выделение с текста.
   const tool = (label, title, action, cls = '') => h('button', {
     type: 'button', class: `tool ${cls}`, title, 'aria-label': title,
-    onmousedown: e => { e.preventDefault(); action(); },
+    onpointerdown: e => e.preventDefault(),
+    onmousedown: e => e.preventDefault(),
+    onclick: e => { e.preventDefault(); action(); },
   }, label);
 
   const markActive = () => {
