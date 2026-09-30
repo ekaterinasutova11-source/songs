@@ -1,6 +1,7 @@
 import { call, setKey, fileUrl, fileText, uploadFile } from './api.js';
 import { groupSongs, variantName, songKey, buildFileName, retitleFileName, AUDIO_EXT } from './parse.js';
 import { NEW_DAYS, NEW_SINCE } from './config.js';
+import { renderLyrics, editorToMarkup, COLORS } from './lyrics.js';
 
 const main = document.getElementById('main');
 let role = null;         // 'teacher' | 'student'
@@ -250,8 +251,8 @@ function renderStudent(student) {
           },
         }, 'Удалить ученика'))));
 
-  main.replaceChildren(
-    teacherTools || null,
+  main.replaceChildren(...[
+    teacherTools,
     h('header', { class: 'page-head' },
       h('div', {},
         h('h1', {}, student.name),
@@ -259,7 +260,8 @@ function renderStudent(student) {
       h('div', { class: 'head-actions' }, addBtn)),
     addBox,
     h('div', { class: 'toolbar' }, search, sort),
-    list);
+    list,
+  ].filter(Boolean));
   draw();
 }
 
@@ -277,7 +279,7 @@ function songCard(song, student, { owner = false } = {}) {
       if (open && !lyricsLoaded) {
         lyricsBox.textContent = 'Загружаю…';
         try {
-          lyricsBox.textContent = await fileText(student.id, song.lyrics.name);
+          lyricsBox.innerHTML = renderLyrics(await fileText(student.id, song.lyrics.name));
           lyricsLoaded = true;
         } catch (e) { lyricsBox.textContent = e.message; }
       }
@@ -315,6 +317,64 @@ function songCard(song, student, { owner = false } = {}) {
 // Все файлы песни (аудио + текст) — для переименования, копирования и удаления.
 const songFiles = song => [...song.variants.map(v => v.file.name), ...(song.lyrics ? [song.lyrics.name] : [])];
 
+// Редактор текста с оформлением: жирный, курсив, подчёркнутый, маркер, цвета.
+function lyricsEditorBox() {
+  const area = h('div', {
+    class: 'field lyrics-edit', contenteditable: 'true', role: 'textbox', 'aria-multiline': 'true',
+    'aria-label': 'Текст песни', 'data-placeholder': 'Вставьте сюда текст песни…',
+  });
+  // Вставляем только чистый текст — чтобы не тащить шрифты и размеры из Word и сайтов.
+  area.addEventListener('paste', e => {
+    e.preventDefault();
+    document.execCommand('insertText', false, e.clipboardData.getData('text/plain'));
+  });
+
+  const cmd = (name, value) => {
+    area.focus();
+    document.execCommand('styleWithCSS', false, name === 'hiliteColor');
+    document.execCommand(name, false, value);
+  };
+  // mousedown + preventDefault — чтобы кнопка не снимала выделение с текста.
+  const tool = (label, title, action, cls = '') => h('button', {
+    type: 'button', class: `tool ${cls}`, title, 'aria-label': title,
+    onmousedown: e => { e.preventDefault(); action(); },
+  }, label);
+
+  const markActive = () => {
+    const sel = getSelection();
+    if (!sel.rangeCount) return false;
+    let n = sel.anchorNode;
+    for (; n && n !== area; n = n.parentNode) {
+      if (n.nodeType === 1 && (n.tagName === 'MARK' || (n.style.backgroundColor && n.style.backgroundColor !== 'transparent'))) return true;
+    }
+    return false;
+  };
+
+  const toolbar = h('div', { class: 'toolbar-fmt' },
+    tool(h('b', {}, 'Ж'), 'Жирный (Ctrl+B)', () => cmd('bold')),
+    tool(h('i', {}, 'К'), 'Курсив (Ctrl+I)', () => cmd('italic')),
+    tool(h('u', {}, 'Ч'), 'Подчёркнутый (Ctrl+U)', () => cmd('underline')),
+    tool(h('mark', {}, 'М'), 'Маркер', () => cmd('hiliteColor', markActive() ? 'transparent' : '#fff176')),
+    h('span', { class: 'tool-sep' }),
+    Object.entries(COLORS).map(([name, c]) =>
+      tool(h('span', { class: `swatch c-${name}` }), c.name, () => cmd('foreColor', c.hex), 'color')),
+    tool('A', 'Обычный цвет', () => cmd('foreColor', getComputedStyle(area).color), 'color plain'),
+    h('span', { class: 'tool-sep' }),
+    tool('⌫', 'Убрать оформление', () => { cmd('removeFormat'); cmd('hiliteColor', 'transparent'); }));
+
+  const el = h('div', { class: 'lyrics-editor' }, toolbar, area);
+  return {
+    el,
+    setValue: markup => { area.innerHTML = renderLyrics(markup, { forEditor: true }); },
+    getValue: () => editorToMarkup(area),
+    setLoading: on => {
+      area.contentEditable = on ? 'false' : 'true';
+      area.classList.toggle('loading', on);
+      if (on) area.textContent = 'Загружаю…';
+    },
+  };
+}
+
 function songEditor(song, student) {
   const isTeacher = role === 'teacher';
 
@@ -333,18 +393,18 @@ function songEditor(song, student) {
   };
 
   // Текст
-  const lyricsArea = h('textarea', { class: 'field lyrics-edit', rows: 8, placeholder: 'Вставьте сюда текст песни…' });
+  const lyricsEditor = lyricsEditorBox();
   if (song.lyrics) {
-    lyricsArea.value = 'Загружаю…';
-    lyricsArea.disabled = true;
+    lyricsEditor.setLoading(true);
     fileText(student.id, song.lyrics.name)
-      .then(t => { lyricsArea.value = t; })
-      .catch(e => { lyricsArea.value = ''; toast(e.message, 'error'); })
-      .finally(() => { lyricsArea.disabled = false; });
+      .then(t => lyricsEditor.setValue(t))
+      .catch(e => toast(e.message, 'error'))
+      .finally(() => lyricsEditor.setLoading(false));
   }
   const saveLyrics = () => mutate(
-    () => call('saveText', { folder: student.id, name: song.lyrics?.name || `${song.title}.txt`, text: lyricsArea.value }),
+    () => call('saveText', { folder: student.id, name: song.lyrics?.name || `${song.title}.txt`, text: lyricsEditor.getValue() }),
     'Текст сохранён');
+  const lyricsArea = lyricsEditor.el;
 
   // Варианты
   const variantRows = song.variants.map(v => h('li', { class: 'variant-row' },

@@ -308,3 +308,34 @@ body.saving, body.saving * { cursor: progress !important; }
 }
 .toast.error { background: #c0392b; color: #fff; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(-6px); } }
+
+/* ---------- Оформление текста песни ---------- */
+.lyrics b, .lyrics-edit b { font-weight: 700; }
+.lyrics mark, .lyrics-edit mark { background: #fff176; color: #22201c; border-radius: 3px; padding: 0 2px; }
+.c-red { color: #c62828; } .c-blue { color: #1565c0; } .c-green { color: #2e7d32; } .c-purple { color: #7b1fa2; }
+@media (prefers-color-scheme: dark) {
+  .lyrics mark, .lyrics-edit mark { background: #6b5d12; color: #fff8d6; }
+  .c-red { color: #ff8a80; } .c-blue { color: #82b1ff; } .c-green { color: #9ccc65; } .c-purple { color: #ce93d8; }
+}
+.lyrics-editor { border: 1px solid var(--line); border-radius: 10px; background: var(--bg); overflow: hidden; }
+.lyrics-editor:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+.lyrics-editor .lyrics-edit {
+  border: 0; border-radius: 0; outline: none; min-height: 180px; max-height: 60vh; overflow-y: auto;
+  white-space: pre-wrap; padding: 12px 14px;
+}
+.lyrics-edit:empty::before { content: attr(data-placeholder); color: var(--muted); }
+.lyrics-edit.loading { color: var(--muted); }
+.toolbar-fmt {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 2px;
+  padding: 6px; border-bottom: 1px solid var(--line); background: var(--surface-2);
+  position: sticky; top: 0;
+}
+.tool {
+  min-width: 34px; height: 34px; border: 0; border-radius: 8px; background: transparent;
+  cursor: pointer; font-size: 16px; display: grid; place-items: center; padding: 0 6px;
+}
+.tool:hover { background: var(--surface); }
+.tool mark { background: #fff176; color: #22201c; padding: 0 3px; border-radius: 3px; }
+.swatch { width: 18px; height: 18px; border-radius: 50%; background: currentColor; display: block; }
+.tool.plain { font-weight: 700; }
+.tool-sep { width: 1px; height: 22px; background: var(--line); margin: 0 4px; }
