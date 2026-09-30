@@ -49,7 +49,21 @@ export function parseFileName(fileName) {
   return { title: base, kind: 'orig', label: '' };
 }
 
-const KIND_ORDER = { plus: 0, minus: 1, orig: 2 };
+// Имя нового файла по названию песни, типу и пометке: «Спички - (медленный).mp3».
+export function buildFileName(title, kind, label, ext) {
+  label = label.trim();
+  if (kind === 'orig') return `${title} (${label || 'оригинал'})${ext}`;
+  return `${title} ${kind === 'plus' ? '+' : '-'}${label ? ` (${label})` : ''}${ext}`;
+}
+
+// То же имя файла, но с другим названием песни (пометки и расширение сохраняются).
+export function retitleFileName(fileName, newTitle) {
+  if (LYRICS_EXT.test(fileName)) return `${newTitle}.txt`;
+  const { title } = parseFileName(fileName);
+  return newTitle + fileName.slice(fileName.indexOf(title) + title.length);
+}
+
+const KIND_ORDER ={ plus: 0, minus: 1, orig: 2 };
 const KIND_NAME = { plus: 'Плюс', minus: 'Минус', orig: 'Оригинал' };
 
 export function variantName(v) {

@@ -1,10 +1,12 @@
-import { loadLibrary, fileUrl, fileText } from './disk.js';
-import { groupSongs, variantName, songKey } from './parse.js';
-import { PUBLIC_FOLDER, NEW_DAYS, NEW_SINCE } from './config.js';
+import { call, setKey, fileUrl, fileText, uploadFile } from './api.js';
+import { groupSongs, variantName, songKey, buildFileName, retitleFileName, AUDIO_EXT } from './parse.js';
+import { NEW_DAYS, NEW_SINCE } from './config.js';
 
 const main = document.getElementById('main');
-let library = null;      // [{id, name, songs}]
-let loading = null;
+let role = null;         // 'teacher' | 'student'
+let library = null;      // [{id, name, key?, songs}]
+let libraryKey = null;   // для какого ключа загружена библиотека
+let openEditor = null;   // песня, у которой открыт редактор (folder + key)
 
 // ---------- Маленький помощник для создания элементов ----------
 function h(tag, attrs = {}, ...children) {
@@ -13,6 +15,7 @@ function h(tag, attrs = {}, ...children) {
     if (v == null || v === false) continue;
     if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
     else if (k === 'class') el.className = v;
+    else if (k === 'value') el.value = v;
     else el.setAttribute(k, v === true ? '' : v);
   }
   for (const c of children.flat()) {
@@ -29,50 +32,81 @@ const plural = (n, one, few, many) => {
 };
 
 const isNew = iso => iso && iso >= NEW_SINCE && (Date.now() - new Date(iso)) < NEW_DAYS * 864e5;
+const extOf = name => (name.match(/\.[^.]+$/) || ['.mp3'])[0].toLowerCase();
+
+function localGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
+function localSet(k, v) { try { localStorage.setItem(k, v); } catch { /* приватный режим */ } }
+
+// ---------- Уведомления ----------
+const toastBox = h('div', { class: 'toasts', role: 'status', 'aria-live': 'polite' });
+document.body.append(toastBox);
+function toast(text, kind = '') {
+  const t = h('div', { class: `toast ${kind}` }, text);
+  toastBox.append(t);
+  setTimeout(() => t.remove(), kind === 'error' ? 6000 : 3000);
+}
+
+// Выполнить изменение, показать ошибку, перечитать библиотеку и перерисовать.
+async function mutate(fn, okText) {
+  try {
+    document.body.classList.add('saving');
+    await fn();
+    if (okText) toast(okText);
+  } catch (e) {
+    toast(e.message, 'error');
+  } finally {
+    document.body.classList.remove('saving');
+  }
+  const y = scrollY;
+  await route(true, true);
+  scrollTo(0, y);
+}
 
 // ---------- Загрузка ----------
-async function ensureLibrary(force = false) {
-  if (library && !force) return library;
-  if (!loading || force) {
-    loading = loadLibrary().then(dirs => {
-      library = dirs
-        .map(d => ({ id: d.id, name: d.name, songs: groupSongs(d.files) }))
-        .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
-      return library;
-    }).finally(() => { loading = null; });
-  }
-  return loading;
+async function ensureLibrary(key, force) {
+  if (library && libraryKey === key && !force) return;
+  setKey(key);
+  const data = await call('library');
+  role = data.role;
+  libraryKey = key;
+  library = data.students
+    .map(d => ({ id: d.id, name: d.name, key: d.key, songs: groupSongs(d.files) }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
 }
 
-function showLoading() {
-  main.replaceChildren(h('div', { class: 'state' }, h('div', { class: 'spinner' }), 'Загружаю песни с Яндекс Диска…'));
-}
-
-function showError(err) {
-  main.replaceChildren(h('div', { class: 'state' },
-    h('p', {}, 'Не получилось загрузить песни.'),
-    h('p', { class: 'muted' }, String(err.message || err)),
-    h('button', { class: 'btn', onclick: () => route(true) }, 'Попробовать снова')));
+function showState(...children) {
+  main.replaceChildren(h('div', { class: 'state' }, ...children));
 }
 
 // ---------- Маршруты ----------
-async function route(force = false) {
+// #/t/<ключ>               — преподаватель, все ученики
+// #/t/<ключ>/s/<папка>     — преподаватель на страничке ученика
+// #/s/<ключ>               — ученик
+async function route(force = false, quiet = false) {
   const hash = location.hash.replace(/^#\/?/, '');
-  if (!hash) return renderLanding();
-  showLoading();
-  try { await ensureLibrary(force); } catch (e) { return showError(e); }
-  if (hash === 'all') return renderTeacher();
-  const m = hash.match(/^s\/([0-9a-f]+)/);
-  const student = m && library.find(s => s.id === m[1]);
-  if (student) return renderStudent(student);
-  main.replaceChildren(h('div', { class: 'state' },
-    h('p', {}, 'Такой странички нет.'),
-    h('p', { class: 'muted' }, 'Возможно, ссылка скопировалась не полностью — попросите новую у преподавателя.')));
+  const m = hash.match(/^([ts])\/([\w-]{8,})(?:\/s\/(.+))?$/);
+  if (!m) return hash ? renderOldLink() : renderLanding();
+  const [, mode, key, folder] = m;
+  if (!quiet || !library) showState(h('div', { class: 'spinner' }), 'Загружаю песни…');
+  try {
+    await ensureLibrary(key, force);
+  } catch (e) {
+    return showState(
+      h('p', {}, e.status === 403 ? 'Эта ссылка не работает.' : 'Не получилось загрузить песни.'),
+      h('p', { class: 'muted' }, e.message),
+      e.status === 403 ? null : h('button', { class: 'btn', onclick: () => route(true) }, 'Попробовать снова'));
+  }
+  if (role === 'student' || mode === 's') return renderStudent(library[0]);
+  if (folder) {
+    const s = library.find(x => x.id === decodeURIComponent(folder));
+    if (s) return renderStudent(s);
+    if (!force) return route(true, quiet);   // может, ученика только что добавили
+  }
+  renderTeacher(key);
 }
 
-window.addEventListener('hashchange', () => { route(); window.scrollTo(0, 0); });
+window.addEventListener('hashchange', () => { openEditor = null; route(); window.scrollTo(0, 0); });
 
-// ---------- Стартовая страница ----------
 function renderLanding() {
   document.title = 'Песни учеников';
   main.replaceChildren(h('div', { class: 'state landing' },
@@ -81,27 +115,50 @@ function renderLanding() {
     h('p', { class: 'muted' }, 'Откройте свою личную ссылку, которую прислал преподаватель.')));
 }
 
+function renderOldLink() {
+  document.title = 'Песни учеников';
+  showState(h('p', {}, 'Эта ссылка устарела.'),
+    h('p', { class: 'muted' }, 'Сайт обновился — попросите у преподавателя новую личную ссылку.'));
+}
+
 // ---------- Страница преподавателя ----------
-function renderTeacher() {
+const studentLink = s => `${location.origin}${location.pathname}#/s/${s.key}`;
+
+async function copyText(text, btn) {
+  try {
+    await navigator.clipboard.writeText(text);
+    const old = btn.textContent;
+    btn.textContent = 'Скопировано ✓';
+    setTimeout(() => { btn.textContent = old; }, 1800);
+  } catch {
+    prompt('Скопируйте ссылку:', text);
+  }
+}
+
+function renderTeacher(key) {
   document.title = 'Все ученики — Песни';
   const results = h('div', { class: 'results' });
-  const grid = h('div', { class: 'students' }, library.map(studentCard));
+  const grid = h('div', { class: 'students' }, library.map(s => studentCard(s, key)));
 
   const search = h('input', {
     type: 'search', class: 'search', placeholder: 'Найти песню у всех учеников…',
     oninput: () => {
       const q = songKey(search.value);
       grid.hidden = !!q;
-      results.replaceChildren();
-      if (!q) return;
+      if (!q) return results.replaceChildren();
       const found = [];
       for (const s of library) for (const song of s.songs)
         if (song.key.includes(q)) found.push({ s, song });
       results.replaceChildren(found.length
-        ? h('div', { class: 'songs' }, found.map(({ s, song }) => songCard(song, s.name)))
+        ? h('div', { class: 'songs' }, found.map(({ s, song }) => songCard(song, s, { owner: true })))
         : h('p', { class: 'muted' }, 'Ничего не нашлось.'));
     },
   });
+
+  const addStudent = () => {
+    const name = prompt('Имя ученика (или название коллектива):');
+    if (name?.trim()) mutate(() => call('createStudent', { name }), `Добавлен: ${name.trim()}`);
+  };
 
   const total = library.reduce((n, s) => n + s.songs.length, 0);
   main.replaceChildren(
@@ -111,46 +168,32 @@ function renderTeacher() {
         h('h1', {}, 'Ученики'),
         h('p', { class: 'muted' }, `${plural(library.length, 'страничка', 'странички', 'страничек')} · ${plural(total, 'песня', 'песни', 'песен')}`)),
       h('div', { class: 'head-actions' },
-        h('a', { class: 'btn ghost', href: PUBLIC_FOLDER, target: '_blank', rel: 'noopener' }, 'Папка на Диске'),
+        h('button', { class: 'btn primary', onclick: addStudent }, '+ Ученик'),
         h('button', { class: 'btn ghost', onclick: () => route(true) }, 'Обновить'))),
-    search, results, grid);
+    search, results, grid,
+    h('p', { class: 'muted hint' }, 'Не показывайте эту страницу ученикам: её адрес открывает доступ ко всем песням.'));
 }
 
-function studentLink(s) {
-  return `${location.origin}${location.pathname}#/s/${s.id}`;
-}
-
-function studentCard(s) {
-  const copyBtn = h('button', {
-    class: 'btn small',
-    onclick: async () => {
-      try {
-        await navigator.clipboard.writeText(studentLink(s));
-        copyBtn.textContent = 'Скопировано ✓';
-      } catch {
-        prompt('Скопируйте ссылку:', studentLink(s));
-      }
-      setTimeout(() => { copyBtn.textContent = 'Скопировать ссылку'; }, 1800);
-    },
-  }, 'Скопировать ссылку');
+function studentCard(s, key) {
+  const copyBtn = h('button', { class: 'btn small', onclick: () => copyText(studentLink(s), copyBtn) }, 'Скопировать ссылку');
   const fresh = s.songs.filter(x => isNew(x.modified)).length;
+  const href = `#/t/${key}/s/${encodeURIComponent(s.id)}`;
   return h('article', { class: 'student' },
-    h('a', { class: 'student-name', href: `#/s/${s.id}` }, s.name),
+    h('a', { class: 'student-name', href }, s.name),
     h('p', { class: 'muted' }, plural(s.songs.length, 'песня', 'песни', 'песен'),
       fresh ? h('span', { class: 'badge' }, `новых: ${fresh}`) : null),
     h('div', { class: 'student-actions' },
-      h('a', { class: 'btn small primary', href: `#/s/${s.id}` }, 'Открыть'), copyBtn));
+      h('a', { class: 'btn small primary', href }, 'Открыть'), copyBtn));
 }
 
 // ---------- Страница ученика ----------
 let sortMode = localGet('sort') || 'name';
 
-function localGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
-function localSet(k, v) { try { localStorage.setItem(k, v); } catch { /* приватный режим */ } }
-
 function renderStudent(student) {
   document.title = `${student.name} — Песни`;
+  const isTeacher = role === 'teacher';
   const list = h('div', { class: 'songs' });
+  const addBox = h('div', { class: 'add-song', hidden: true });
 
   const draw = () => {
     const q = songKey(search.value);
@@ -159,7 +202,7 @@ function renderStudent(student) {
       ? (a, b) => b.modified.localeCompare(a.modified)
       : (a, b) => a.title.localeCompare(b.title, 'ru'));
     list.replaceChildren(...(songs.length
-      ? songs.map(s => songCard(s))
+      ? songs.map(s => songCard(s, student))
       : [h('p', { class: 'muted' }, q ? 'Ничего не нашлось.' : 'Здесь пока нет песен.')]));
   };
 
@@ -171,17 +214,57 @@ function renderStudent(student) {
     h('option', { value: 'name', selected: sortMode === 'name' }, 'По алфавиту'),
     h('option', { value: 'new', selected: sortMode === 'new' }, 'Сначала новые'));
 
+  const addBtn = h('button', {
+    class: 'btn primary', onclick: () => {
+      addBox.hidden = !addBox.hidden;
+      if (!addBox.hidden) { addBox.replaceChildren(addSongForm(student, () => { addBox.hidden = true; })); addBox.querySelector('input')?.focus(); }
+    },
+  }, '+ Песня');
+
+  const teacherTools = isTeacher && h('div', { class: 'teacher-tools' },
+    h('a', { class: 'btn ghost small', href: `#/t/${libraryKey}` }, '← Все ученики'),
+    (() => {
+      const b = h('button', { class: 'btn small', onclick: () => copyText(studentLink(student), b) }, 'Скопировать ссылку ученика');
+      return b;
+    })(),
+    h('details', { class: 'more' },
+      h('summary', { class: 'btn ghost small' }, 'Ещё…'),
+      h('div', { class: 'more-menu' },
+        h('button', {
+          class: 'btn small', onclick: () => {
+            const name = prompt('Новое имя:', student.name);
+            if (name?.trim() && name.trim() !== student.name)
+              mutate(() => call('renameStudent', { folder: student.id, newName: name }), 'Переименовано');
+          },
+        }, 'Переименовать'),
+        h('button', {
+          class: 'btn small', onclick: () => {
+            if (confirm(`Сделать новую ссылку для «${student.name}»? Старая ссылка перестанет работать.`))
+              mutate(() => call('resetLink', { folder: student.id }), 'Новая ссылка готова — скопируйте её');
+          },
+        }, 'Новая ссылка (старая перестанет работать)'),
+        h('button', {
+          class: 'btn small danger', onclick: () => {
+            if (confirm(`Удалить страничку «${student.name}» со всеми песнями? Папка уйдёт в корзину Яндекс Диска, её можно будет восстановить оттуда.`))
+              mutate(async () => { await call('deleteStudent', { folder: student.id }); location.hash = `#/t/${libraryKey}`; }, 'Удалено (в корзине Диска)');
+          },
+        }, 'Удалить ученика'))));
+
   main.replaceChildren(
+    teacherTools || null,
     h('header', { class: 'page-head' },
       h('div', {},
         h('h1', {}, student.name),
-        h('p', { class: 'muted' }, plural(student.songs.length, 'песня', 'песни', 'песен')))),
+        h('p', { class: 'muted' }, plural(student.songs.length, 'песня', 'песни', 'песен'))),
+      h('div', { class: 'head-actions' }, addBtn)),
+    addBox,
     h('div', { class: 'toolbar' }, search, sort),
     list);
   draw();
 }
 
-function songCard(song, owner) {
+// ---------- Карточка песни ----------
+function songCard(song, student, { owner = false } = {}) {
   const lyricsBox = h('div', { class: 'lyrics', hidden: true });
   let lyricsLoaded = false;
   const lyricsBtn = song.lyrics && h('button', {
@@ -194,25 +277,182 @@ function songCard(song, owner) {
       if (open && !lyricsLoaded) {
         lyricsBox.textContent = 'Загружаю…';
         try {
-          lyricsBox.textContent = await fileText(song.lyrics.path);
+          lyricsBox.textContent = await fileText(student.id, song.lyrics.name);
           lyricsLoaded = true;
         } catch (e) { lyricsBox.textContent = e.message; }
       }
     },
   }, 'Текст песни');
 
-  return h('article', { class: 'song', 'data-key': song.key },
+  const editorKey = `${student.id}|${song.key}`;
+  const editBox = h('div', { class: 'editor', hidden: openEditor !== editorKey });
+  const editBtn = h('button', {
+    class: 'link-btn', onclick: () => {
+      const open = editBox.hidden;
+      editBox.hidden = !open;
+      openEditor = open ? editorKey : null;
+      if (open) editBox.replaceChildren(songEditor(song, student));
+    },
+  }, 'Изменить');
+  if (!editBox.hidden) editBox.replaceChildren(songEditor(song, student));
+
+  return h('article', { class: 'song' },
     h('div', { class: 'song-head' },
       h('h2', {}, song.title),
       isNew(song.modified) ? h('span', { class: 'badge' }, 'новое') : null,
-      owner ? h('span', { class: 'owner' }, owner) : null),
-    h('div', { class: 'variants' }, song.variants.map(v =>
+      owner ? h('span', { class: 'owner' }, student.name) : null),
+    song.variants.length
+      ? h('div', { class: 'variants' }, song.variants.map(v =>
+        h('button', {
+          class: `chip ${v.kind}`, 'data-id': `${student.id}|${v.file.name}`,
+          onclick: () => player.play(song, v, student),
+        }, variantName(v))))
+      : h('p', { class: 'muted' }, 'Нет аудио — добавьте вариант в «Изменить».'),
+    h('div', { class: 'song-links' }, lyricsBtn || null, editBtn),
+    lyricsBox, editBox);
+}
+
+// Все файлы песни (аудио + текст) — для переименования, копирования и удаления.
+const songFiles = song => [...song.variants.map(v => v.file.name), ...(song.lyrics ? [song.lyrics.name] : [])];
+
+function songEditor(song, student) {
+  const isTeacher = role === 'teacher';
+
+  // Название
+  const titleInput = h('input', { class: 'field', value: song.title, 'aria-label': 'Название песни' });
+  const saveTitle = () => {
+    const newTitle = titleInput.value.trim();
+    if (!newTitle || newTitle === song.title) return;
+    openEditor = `${student.id}|${songKey(newTitle)}`;
+    mutate(async () => {
+      for (const name of songFiles(song)) {
+        const newName = retitleFileName(name, newTitle);
+        if (newName !== name) await call('rename', { folder: student.id, name, newName });
+      }
+    }, 'Название изменено');
+  };
+
+  // Текст
+  const lyricsArea = h('textarea', { class: 'field lyrics-edit', rows: 8, placeholder: 'Вставьте сюда текст песни…' });
+  if (song.lyrics) {
+    lyricsArea.value = 'Загружаю…';
+    lyricsArea.disabled = true;
+    fileText(student.id, song.lyrics.name)
+      .then(t => { lyricsArea.value = t; })
+      .catch(e => { lyricsArea.value = ''; toast(e.message, 'error'); })
+      .finally(() => { lyricsArea.disabled = false; });
+  }
+  const saveLyrics = () => mutate(
+    () => call('saveText', { folder: student.id, name: song.lyrics?.name || `${song.title}.txt`, text: lyricsArea.value }),
+    'Текст сохранён');
+
+  // Варианты
+  const variantRows = song.variants.map(v => h('li', { class: 'variant-row' },
+    h('span', { class: `dot ${v.kind}` }), h('span', { class: 'variant-name' }, variantName(v)),
+    h('span', { class: 'muted small' }, v.file.name),
+    h('button', {
+      class: 'btn small ghost', onclick: () => {
+        const label = prompt('Пометка варианта (например: медленный, ниже, короткий). Пусто — без пометки:', v.label);
+        if (label === null) return;
+        const newName = buildFileName(v.title, v.kind, label, extOf(v.file.name));
+        if (newName !== v.file.name) mutate(() => call('rename', { folder: student.id, name: v.file.name, newName }), 'Переименовано');
+      },
+    }, 'Пометка'),
+    h('button', {
+      class: 'btn small ghost danger', onclick: () => {
+        if (confirm(`Удалить «${variantName(v)}»? Файл уйдёт в корзину Яндекс Диска.`))
+          mutate(() => call('delete', { folder: student.id, name: v.file.name }), 'Удалено');
+      },
+    }, 'Удалить')));
+
+  // Копирование другому ученику
+  let copyBlock = null;
+  if (isTeacher) {
+    const others = library.filter(s => s.id !== student.id);
+    const sel = h('select', { class: 'field' }, others.map(s => h('option', { value: s.id }, s.name)));
+    copyBlock = h('div', { class: 'edit-section' },
+      h('h3', {}, 'Дать эту песню другому ученику'),
+      h('div', { class: 'row' }, sel,
+        h('button', {
+          class: 'btn small', onclick: () => {
+            const to = others.find(s => s.id === sel.value);
+            mutate(() => call('copyTo', { folder: student.id, to: sel.value, names: songFiles(song) }), `Скопировано: ${to.name}`);
+          },
+        }, 'Скопировать')));
+  }
+
+  return h('div', { class: 'editor-inner' },
+    h('div', { class: 'edit-section' },
+      h('h3', {}, 'Название'),
+      h('div', { class: 'row' }, titleInput, h('button', { class: 'btn small', onclick: saveTitle }, 'Сохранить'))),
+    h('div', { class: 'edit-section' },
+      h('h3', {}, 'Текст песни'),
+      lyricsArea,
+      h('div', { class: 'row end' }, h('button', { class: 'btn small primary', onclick: saveLyrics }, 'Сохранить текст'))),
+    h('div', { class: 'edit-section' },
+      h('h3', {}, 'Аудио'),
+      variantRows.length ? h('ul', { class: 'variant-list' }, variantRows) : null,
+      uploadRow(student, song.title)),
+    copyBlock,
+    h('div', { class: 'edit-section' },
       h('button', {
-        class: `chip ${v.kind}`, 'data-path': v.file.path,
-        onclick: () => player.play(song, v),
-      }, variantName(v)))),
-    lyricsBtn || null,
-    lyricsBox);
+        class: 'btn small danger', onclick: () => {
+          if (confirm(`Удалить песню «${song.title}» целиком (все варианты и текст)? Файлы уйдут в корзину Яндекс Диска.`))
+            mutate(async () => {
+              for (const name of songFiles(song)) await call('delete', { folder: student.id, name });
+            }, 'Песня удалена');
+        },
+      }, 'Удалить песню')));
+}
+
+// Строка «добавить аудио»: тип, пометка, файл.
+function uploadRow(student, title, { onDone } = {}) {
+  const kind = h('select', { class: 'field', 'aria-label': 'Тип' },
+    h('option', { value: 'minus' }, 'Минус'),
+    h('option', { value: 'plus' }, 'Плюс'),
+    h('option', { value: 'orig' }, 'Оригинал'));
+  const label = h('input', { class: 'field', placeholder: 'Пометка: медленный, ниже…', 'aria-label': 'Пометка' });
+  const file = h('input', { type: 'file', accept: 'audio/*,.mp3,.wav,.m4a,.ogg,.flac', class: 'file-input' });
+  const progress = h('div', { class: 'progress', hidden: true }, h('div', { class: 'progress-bar' }));
+  const btn = h('button', {
+    class: 'btn small primary', onclick: async () => {
+      const t = typeof title === 'function' ? title() : title;
+      const f = file.files[0];
+      if (!t) return toast('Сначала напишите название песни', 'error');
+      if (!f) return toast('Выберите аудиофайл', 'error');
+      if (!AUDIO_EXT.test(f.name)) return toast('Это не похоже на аудиофайл (нужен mp3, wav, m4a…)', 'error');
+      const name = buildFileName(t, kind.value, label.value, extOf(f.name));
+      btn.disabled = true;
+      progress.hidden = false;
+      try {
+        await uploadFile(student.id, name, f, p => progress.firstChild.style.width = `${Math.round(p * 100)}%`);
+        onDone?.();
+        await mutate(async () => {}, `Загружено: ${name}`);
+      } catch (e) {
+        toast(e.status === 409 ? 'Такой вариант уже есть — поставьте другую пометку' : e.message, 'error');
+        btn.disabled = false;
+        progress.hidden = true;
+      }
+    },
+  }, 'Загрузить');
+  return h('div', { class: 'upload' },
+    h('div', { class: 'row' }, kind, label),
+    h('div', { class: 'row' }, file, btn),
+    progress);
+}
+
+function addSongForm(student, close) {
+  const title = h('input', { class: 'field', placeholder: 'Название песни', 'aria-label': 'Название песни' });
+  return h('div', { class: 'editor-inner card' },
+    h('h3', {}, 'Новая песня'),
+    title,
+    h('p', { class: 'muted small' }, 'Загрузите первый вариант — остальные варианты и текст можно добавить потом через «Изменить».'),
+    uploadRow(student, () => {
+      const t = title.value.trim();
+      if (t) openEditor = `${student.id}|${songKey(t)}`;
+      return t;
+    }, { onDone: close }),
+    h('div', { class: 'row end' }, h('button', { class: 'btn small ghost', onclick: close }, 'Отмена')));
 }
 
 // ---------- Плеер ----------
@@ -237,16 +477,23 @@ const player = (() => {
     document.querySelectorAll('.chip.active').forEach(c => c.classList.remove('active'));
     if (!current) return;
     document.querySelectorAll('.chip').forEach(c => {
-      if (c.dataset.path === current.v.file.path) c.classList.add('active');
+      if (c.dataset.id === current.id) c.classList.add('active');
     });
   }
 
-  async function play(song, v) {
-    if (current && current.v.file.path === v.file.path) {
+  function failed(text) {
+    sub.textContent = text;
+    playBtn.classList.remove('playing');
+    bar.classList.remove('busy');
+  }
+
+  async function play(song, v, student) {
+    const id = `${student.id}|${v.file.name}`;
+    if (current && current.id === id) {
       return audio.paused ? audio.play() : audio.pause();
     }
     const my = ++token;
-    current = { song, v };
+    current = { id };
     bar.hidden = false;
     document.body.classList.add('has-player');
     title.textContent = song.title;
@@ -254,7 +501,7 @@ const player = (() => {
     bar.classList.add('busy');
     markActive();
     try {
-      const url = await fileUrl(v.file.path);
+      const url = await fileUrl(student.id, v.file.name);
       if (my !== token) return;
       const wasRate = audio.playbackRate;
       audio.src = url;
@@ -265,7 +512,7 @@ const player = (() => {
       }
       await audio.play();
     } catch (e) {
-      if (my === token && e.name !== 'AbortError') sub.textContent = 'Не удалось запустить: ' + e.message;
+      if (my === token && e.name !== 'AbortError') failed('Не удалось запустить: ' + e.message);
     } finally {
       if (my === token) bar.classList.remove('busy');
     }
@@ -302,15 +549,14 @@ const player = (() => {
   audio.addEventListener('play', () => { playBtn.classList.add('playing'); playBtn.setAttribute('aria-label', 'Пауза'); });
   audio.addEventListener('pause', () => { playBtn.classList.remove('playing'); playBtn.setAttribute('aria-label', 'Играть'); });
   audio.addEventListener('error', () => {
-    playBtn.classList.remove('playing');
-    bar.classList.remove('busy');
+    if (current) failed('Не играет. Если сайт открыт в DuckDuckGo — попробуйте Chrome или Яндекс Браузер.');
   });
   audio.addEventListener('waiting', () => bar.classList.add('busy'));
   audio.addEventListener('playing', () => bar.classList.remove('busy'));
 
   // Пробел — пауза/продолжить, если не печатаем в поле.
   document.addEventListener('keydown', e => {
-    if (e.code !== 'Space' || !current || e.target.closest('input, select, textarea, button')) return;
+    if (e.code !== 'Space' || !current || e.target.closest('input, select, textarea, button, summary')) return;
     e.preventDefault();
     audio.paused ? audio.play() : audio.pause();
   });

@@ -1,6 +1,5 @@
-// Публичная папка на Яндекс Диске, из которой сайт берёт учеников и песни.
-// Каждая подпапка — ученик (или коллектив), внутри — аудиофайлы и тексты .txt.
-export const PUBLIC_FOLDER = 'https://disk.yandex.ru/d/YsfJ1UMZXZsqJQ';
+// Адрес посредника в Yandex Cloud (Cloud Function), через который сайт работает с Диском.
+export const FUNCTION_URL = 'https://functions.yandexcloud.net/d4eotnn5qmurkd5kle8k';
 
 // Песни, изменённые за это число дней, помечаются как «новое».
 export const NEW_DAYS = 14;

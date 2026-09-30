@@ -1,0 +1,242 @@
+// Посредник между сайтом и Яндекс Диском (Yandex Cloud Function, Node.js 22).
+// Хранит ключ к Диску и пускает каждого только туда, куда можно:
+// ученика — в его папку, преподавателя — во все.
+//
+// Переменные окружения:
+//   DISK_TOKEN  — OAuth-токен Яндекс Диска
+//   TEACHER_KEY — секрет из ссылки преподавателя
+//   ROOT        — папка с учениками, например «disk:/Песни для Notion»
+//   SETTINGS    — файл с ключами учеников, например «disk:/Песни учеников — настройки (не удалять).json»
+
+import crypto from 'node:crypto';
+
+const API = 'https://cloud-api.yandex.net/v1/disk';
+const { DISK_TOKEN, TEACHER_KEY, ROOT, SETTINGS } = process.env;
+const ALLOWED_ORIGINS = [
+  'https://ekaterinasutova11-source.github.io',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+];
+
+class HttpError extends Error {
+  constructor(status, message) { super(message); this.status = status; }
+}
+
+// ---------- Яндекс Диск ----------
+async function disk(method, path, params = {}, { okStatuses = [] } = {}) {
+  const qs = new URLSearchParams(params).toString();
+  const r = await fetch(`${API}${path}${qs ? '?' + qs : ''}`, {
+    method, headers: { Authorization: 'OAuth ' + DISK_TOKEN },
+  });
+  if (r.status === 204) return null;
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok && !okStatuses.includes(r.status)) {
+    const msg = r.status === 409 ? 'Файл или папка с таким именем уже есть'
+      : r.status === 404 ? 'Не найдено — возможно, уже удалено'
+      : body.message || `Ошибка Диска (${r.status})`;
+    throw new HttpError(r.status === 409 || r.status === 404 ? r.status : 502, msg);
+  }
+  return { status: r.status, ...body };
+}
+
+async function list(path) {
+  const items = [];
+  for (let offset = 0; ; offset += 1000) {
+    const page = (await disk('GET', '/resources', {
+      path, limit: 1000, offset,
+      fields: '_embedded.items.name,_embedded.items.path,_embedded.items.type,_embedded.items.modified,_embedded.items.size,_embedded.items.resource_id,_embedded.total',
+    }))._embedded;
+    items.push(...page.items);
+    if (items.length >= page.total || !page.items.length) return items;
+  }
+}
+
+async function readJson(path) {
+  try {
+    const { href } = await disk('GET', '/resources/download', { path });
+    return await (await fetch(href)).json();
+  } catch (e) {
+    if (e.status === 404) return null;
+    throw e;
+  }
+}
+
+async function writeText(path, text, type = 'text/plain; charset=utf-8') {
+  const { href } = await disk('GET', '/resources/upload', { path, overwrite: 'true' });
+  const r = await fetch(href, { method: 'PUT', body: text, headers: { 'Content-Type': type } });
+  if (!r.ok) throw new HttpError(502, `Не удалось сохранить (${r.status})`);
+}
+
+// Операции с папками Диск может выполнять асинхронно — дожидаемся конца.
+async function waitOperation(res) {
+  if (res?.status !== 202 || !res.href) return;
+  const opPath = new URL(res.href).pathname.replace(/^\/v1\/disk/, '');
+  for (let i = 0; i < 40; i++) {
+    const op = await disk('GET', opPath);
+    if (op.status === 'success') return;
+    if (op.status === 'failed') throw new HttpError(502, 'Диск не смог выполнить операцию');
+    await new Promise(r => setTimeout(r, 500));
+  }
+}
+
+// ---------- Настройки (ключи учеников) ----------
+const newKey = () => crypto.randomBytes(9).toString('base64url');
+
+async function loadState() {
+  const [settings, rootItems] = await Promise.all([readJson(SETTINGS), list(ROOT)]);
+  const s = settings || { students: {} };
+  const folders = rootItems.filter(i => i.type === 'dir');
+  let changed = !settings;
+  for (const f of folders) {
+    if (!s.students[f.resource_id]) { s.students[f.resource_id] = { key: newKey() }; changed = true; }
+  }
+  if (changed) await writeText(SETTINGS, JSON.stringify(s, null, 2), 'application/json');
+  return { settings: s, folders };
+}
+
+const saveSettings = s => writeText(SETTINGS, JSON.stringify(s, null, 2), 'application/json');
+
+// Имя файла или папки: без слэшей и служебных символов.
+function cleanName(name, what = 'Название') {
+  const n = String(name ?? '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!n || n === '.' || n === '..') throw new HttpError(400, `${what} не может быть пустым`);
+  if (n.length > 150) throw new HttpError(400, `${what} слишком длинное`);
+  return n;
+}
+
+function fileOut(i) {
+  return { name: i.name, modified: i.modified, size: i.size };
+}
+
+// ---------- Действия ----------
+async function folderFiles(folder) {
+  return (await list(folder.path)).filter(i => i.type === 'file').map(fileOut);
+}
+
+async function handle(req) {
+  const { action, key } = req;
+  if (!key) throw new HttpError(401, 'Нет ключа доступа');
+  const isTeacher = key === TEACHER_KEY;
+  const state = await loadState();
+  const { settings, folders } = state;
+
+  // Папка, с которой разрешено работать по этому ключу.
+  const own = isTeacher ? null : folders.find(f => settings.students[f.resource_id]?.key === key);
+  if (!isTeacher && !own) throw new HttpError(403, 'Ссылка устарела или неверна — попросите новую у преподавателя');
+
+  const folderById = id => {
+    const f = isTeacher ? folders.find(x => x.resource_id === id) : (id === own.resource_id ? own : null);
+    if (!f) throw new HttpError(403, 'Нет доступа к этой папке');
+    return f;
+  };
+  const filePath = (folder, name) => `${folder.path}/${cleanName(name, 'Имя файла')}`;
+  const teacherOnly = () => { if (!isTeacher) throw new HttpError(403, 'Это может только преподаватель'); };
+
+  switch (action) {
+    case 'library': {
+      if (isTeacher) {
+        const students = await Promise.all(folders.map(async f => ({
+          id: f.resource_id, name: f.name, key: settings.students[f.resource_id].key, files: await folderFiles(f),
+        })));
+        return { role: 'teacher', students };
+      }
+      return { role: 'student', students: [{ id: own.resource_id, name: own.name, files: await folderFiles(own) }] };
+    }
+
+    case 'url': {
+      const { href } = await disk('GET', '/resources/download', { path: filePath(folderById(req.folder), req.name) });
+      return { href };
+    }
+
+    case 'uploadUrl': {
+      const path = filePath(folderById(req.folder), req.name);
+      const { href } = await disk('GET', '/resources/upload', { path, overwrite: req.overwrite ? 'true' : 'false' });
+      return { href };
+    }
+
+    case 'saveText': {
+      const name = cleanName(req.name, 'Имя файла');
+      if (!/\.txt$/i.test(name)) throw new HttpError(400, 'Можно сохранять только .txt');
+      await writeText(filePath(folderById(req.folder), name), String(req.text ?? ''));
+      return { ok: true };
+    }
+
+    case 'rename': {
+      const folder = folderById(req.folder);
+      await disk('POST', '/resources/move', {
+        from: filePath(folder, req.name), path: filePath(folder, req.newName), overwrite: 'false',
+      });
+      return { ok: true };
+    }
+
+    case 'delete': {
+      // В корзину Диска, а не навсегда — всегда можно восстановить.
+      await waitOperation(await disk('DELETE', '/resources', { path: filePath(folderById(req.folder), req.name), permanently: 'false' }));
+      return { ok: true };
+    }
+
+    case 'copyTo': {
+      teacherOnly();
+      const from = folderById(req.folder), to = folderById(req.to);
+      for (const name of req.names || []) {
+        await disk('POST', '/resources/copy', { from: filePath(from, name), path: filePath(to, name), overwrite: 'false' }, { okStatuses: [409] });
+      }
+      return { ok: true };
+    }
+
+    case 'createStudent': {
+      teacherOnly();
+      await disk('PUT', '/resources', { path: `${ROOT}/${cleanName(req.name, 'Имя ученика')}` });
+      return { ok: true };
+    }
+
+    case 'renameStudent': {
+      teacherOnly();
+      const f = folderById(req.folder);
+      await waitOperation(await disk('POST', '/resources/move', { from: f.path, path: `${ROOT}/${cleanName(req.newName, 'Имя ученика')}`, overwrite: 'false' }));
+      return { ok: true };
+    }
+
+    case 'deleteStudent': {
+      teacherOnly();
+      const f = folderById(req.folder);
+      await waitOperation(await disk('DELETE', '/resources', { path: f.path, permanently: 'false' }));
+      delete settings.students[f.resource_id];
+      await saveSettings(settings);
+      return { ok: true };
+    }
+
+    case 'resetLink': {
+      teacherOnly();
+      const f = folderById(req.folder);
+      settings.students[f.resource_id] = { key: newKey() };
+      await saveSettings(settings);
+      return { key: settings.students[f.resource_id].key };
+    }
+
+    default:
+      throw new HttpError(400, 'Неизвестное действие');
+  }
+}
+
+// ---------- Точка входа ----------
+export async function handler(event) {
+  const origin = event.headers?.Origin || event.headers?.origin || '';
+  const headers = {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Access-Control-Allow-Origin': ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0],
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    Vary: 'Origin',
+  };
+  if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers, body: '' };
+  try {
+    const raw = event.isBase64Encoded ? Buffer.from(event.body || '', 'base64').toString('utf8') : event.body;
+    const result = await handle(JSON.parse(raw || '{}'));
+    return { statusCode: 200, headers, body: JSON.stringify(result) };
+  } catch (e) {
+    const status = e instanceof HttpError ? e.status : 500;
+    if (status === 500) console.error(e);
+    return { statusCode: status, headers, body: JSON.stringify({ error: e instanceof HttpError ? e.message : 'Внутренняя ошибка' }) };
+  }
+}
