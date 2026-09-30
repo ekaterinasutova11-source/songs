@@ -7,7 +7,22 @@ const ENDPOINT = ['localhost', '127.0.0.1'].includes(location.hostname) ? '/api'
 let accessKey = '';
 export const setKey = k => { accessKey = k; };
 
+// Чтение можно спокойно повторить, если сервер на секунду не ответил.
+const SAFE_TO_RETRY = new Set(['library', 'url']);
+
 export async function call(action, params = {}) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await callOnce(action, params);
+    } catch (e) {
+      const transient = !e.status || e.status >= 500;
+      if (!SAFE_TO_RETRY.has(action) || !transient || attempt >= 3) throw e;
+      await new Promise(r => setTimeout(r, 700 * attempt));
+    }
+  }
+}
+
+async function callOnce(action, params) {
   let r;
   try {
     // text/plain — «простой» запрос, браузеру не нужна предварительная проверка.

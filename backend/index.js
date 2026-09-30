@@ -23,11 +23,26 @@ class HttpError extends Error {
 }
 
 // ---------- Яндекс Диск ----------
+// Диск иногда на мгновение не отвечает — повторяем запрос ещё до двух раз.
+async function fetchRetry(url, opts, tries = 3) {
+  for (let i = 1; ; i++) {
+    try {
+      const r = await fetch(url, opts);
+      if (r.status < 500 || i >= tries) return r;
+    } catch (e) {
+      if (i >= tries) throw e;
+    }
+    await new Promise(res => setTimeout(res, 300 * i));
+  }
+}
+
 async function disk(method, path, params = {}, { okStatuses = [] } = {}) {
   const qs = new URLSearchParams(params).toString();
-  const r = await fetch(`${API}${path}${qs ? '?' + qs : ''}`, {
+  // Повторять можно только то, что безопасно выполнить дважды.
+  const tries = method === 'GET' ? 3 : 1;
+  const r = await fetchRetry(`${API}${path}${qs ? '?' + qs : ''}`, {
     method, headers: { Authorization: 'OAuth ' + DISK_TOKEN },
-  });
+  }, tries);
   if (r.status === 204) return null;
   const body = await r.json().catch(() => ({}));
   if (!r.ok && !okStatuses.includes(r.status)) {
@@ -51,10 +66,25 @@ async function list(path) {
   }
 }
 
+// Ссылка Диска ведёт на downloader.disk.yandex.ru, а тот перенаправляет на *.storage.yandex.net.
+// Браузер DuckDuckGo блокирует адреса yandex.ru на чужих сайтах, поэтому отдаём сразу конечный адрес.
+async function directUrl(href) {
+  try {
+    const r = await fetch(href, { redirect: 'manual', headers: { Range: 'bytes=0-0' } });
+    r.body?.cancel();
+    const loc = r.headers.get('location');
+    return r.status >= 300 && r.status < 400 && loc ? new URL(loc, href).href : href;
+  } catch {
+    return href;
+  }
+}
+
 async function readJson(path) {
   try {
     const { href } = await disk('GET', '/resources/download', { path });
-    return await (await fetch(href)).json();
+    const r = await fetchRetry(href);
+    if (!r.ok) throw new HttpError(502, `Не удалось прочитать настройки (${r.status})`);
+    return await r.json();
   } catch (e) {
     if (e.status === 404) return null;
     throw e;
@@ -63,7 +93,7 @@ async function readJson(path) {
 
 async function writeText(path, text, type = 'text/plain; charset=utf-8') {
   const { href } = await disk('GET', '/resources/upload', { path, overwrite: 'true' });
-  const r = await fetch(href, { method: 'PUT', body: text, headers: { 'Content-Type': type } });
+  const r = await fetchRetry(href, { method: 'PUT', body: text, headers: { 'Content-Type': type } });
   if (!r.ok) throw new HttpError(502, `Не удалось сохранить (${r.status})`);
 }
 
@@ -145,7 +175,7 @@ async function handle(req) {
 
     case 'url': {
       const { href } = await disk('GET', '/resources/download', { path: filePath(folderById(req.folder), req.name) });
-      return { href };
+      return { href: await directUrl(href) };
     }
 
     case 'uploadUrl': {
