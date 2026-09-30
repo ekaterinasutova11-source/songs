@@ -2,7 +2,7 @@
 import { FUNCTION_URL } from './config.js';
 
 // На своём компьютере (node server.js) посредник работает по адресу /api.
-const ENDPOINT = ['localhost', '127.0.0.1'].includes(location.hostname) ? '/api' : FUNCTION_URL;
+const ENDPOINT = ['localhost', '127.0.0.1'].includes(location.hostname) && !location.search.includes('api=cloud') ? '/api' : FUNCTION_URL;
 
 let accessKey = '';
 export const setKey = k => { accessKey = k; };

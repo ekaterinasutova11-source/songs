@@ -63,7 +63,7 @@ export function retitleFileName(fileName, newTitle) {
   return newTitle + fileName.slice(fileName.indexOf(title) + title.length);
 }
 
-const KIND_ORDER ={ plus: 0, minus: 1, orig: 2 };
+const KIND_ORDER = { minus: 0, plus: 1, orig: 2 };
 const KIND_NAME = { plus: 'Плюс', minus: 'Минус', orig: 'Оригинал' };
 
 export function variantName(v) {
@@ -96,6 +96,9 @@ export function groupSongs(items) {
     if (capitals(p.title) > capitals(song.title)) song.title = p.title;
     song.variants.push({ ...p, file: it });
     if (it.modified > song.modified) song.modified = it.modified;
+  }
+  for (const [key, file] of lyrics) {
+    if (!songs.has(key)) songs.set(key, { key, title: file.name.replace(LYRICS_EXT, '').trim(), variants: [], modified: file.modified || '' });
   }
   for (const song of songs.values()) {
     song.lyrics = lyrics.get(song.key) || null;

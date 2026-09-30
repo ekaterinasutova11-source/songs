@@ -15,6 +15,7 @@
 
   <div id="player" class="player" hidden>
     <div class="p-info">
+      <div class="p-impulse" hidden></div>
       <div class="p-title"></div>
       <div class="p-sub"></div>
     </div>
@@ -30,12 +31,28 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5V2l5 4-5 4V7a6 6 0 1 0 6 6h2a8 8 0 1 1-8-8z"/><text x="12" y="16.5" text-anchor="middle" font-size="7" font-weight="700">5</text></svg>
       </button>
     </div>
+    <div class="p-metro" hidden>
+      <span class="m-dot" aria-hidden="true"></span>
+      <span class="m-bpm">…</span>
+      <span class="m-status muted small"></span>
+      <span class="m-tools">
+        <button class="m-btn" data-act="half" title="Вдвое медленнее">½</button>
+        <button class="m-btn" data-act="double" title="Вдвое быстрее">×2</button>
+        <button class="m-btn" data-act="minus" title="Чуть медленнее">−</button>
+        <button class="m-btn" data-act="plus" title="Чуть быстрее">+</button>
+        <button class="m-btn wide" data-act="tap" title="Нажмите точно в момент доли — щелчки подстроятся">Попасть в долю</button>
+        <input class="m-vol" type="range" min="0" max="1" step="0.05" value="0.6" aria-label="Громкость метронома" title="Громкость метронома">
+      </span>
+    </div>
     <div class="p-timeline">
       <span class="p-cur">0:00</span>
       <input class="p-seek" type="range" min="0" max="1000" value="0" aria-label="Позиция">
       <span class="p-dur">0:00</span>
     </div>
     <div class="p-extra">
+      <button class="p-btn small p-metro-btn" aria-pressed="false" title="Метроном">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2h4l5 19H5L10 2zm1.6 2L8.4 16h7.2L12.4 4h-.8zM7.9 18l-.5 1h9.2l-.5-1H7.9zM12 13l5.5-8.5 1.3.8L13.6 13H12z"/></svg>
+      </button>
       <button class="p-btn small p-loop" aria-pressed="false" title="Повторять">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v3l4-4-4-4v3H5v6h2zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2z"/></svg>
       </button>

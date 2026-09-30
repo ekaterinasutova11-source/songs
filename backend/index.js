@@ -138,9 +138,48 @@ function fileOut(i) {
   return { name: i.name, modified: i.modified, size: i.size };
 }
 
+// ---------- Данные песен (импульс, заметки, перевод, темп) ----------
+// Хранятся в одном файле в папке ученика: { songs: { <ключ песни>: {...} } }.
+const META_NAME = 'Данные сайта (не удалять).json';
+const LIMITS = { impulse: 40, notes: 5000, translation: 50000 };
+
+async function readMeta(folder) {
+  return (await readJson(`${folder.path}/${META_NAME}`)) || { songs: {} };
+}
+const writeMeta = (folder, meta) => writeText(`${folder.path}/${META_NAME}`, JSON.stringify(meta, null, 1), 'application/json');
+
+function cleanPatch(patch = {}) {
+  const out = {};
+  for (const k of ['impulse', 'notes', 'translation']) {
+    if (patch[k] === undefined) continue;
+    let v = String(patch[k] ?? '');
+    if (k === 'impulse') {
+      v = v.replace(/s+/g, ' ').trim();
+      if (v.split(' ').filter(Boolean).length > 2) throw new HttpError(400, 'Импульс — не больше двух слов');
+    }
+    if (v.length > LIMITS[k]) throw new HttpError(400, 'Слишком длинный текст');
+    out[k] = v;
+  }
+  if (patch.tempo && typeof patch.tempo === 'object') {
+    out.tempo = {};
+    for (const [file, t] of Object.entries(patch.tempo)) {
+      out.tempo[cleanName(file, 'Имя файла')] = t && Number.isFinite(+t.bpm) && +t.bpm > 20 && +t.bpm < 400
+        ? { bpm: Math.round(+t.bpm * 1000) / 1000, offset: Math.round((+t.offset || 0) * 1000) / 1000 }
+        : null;
+    }
+  }
+  return out;
+}
+
 // ---------- Действия ----------
 async function folderFiles(folder) {
   return (await list(folder.path)).filter(i => i.type === 'file').map(fileOut);
+}
+
+async function folderData(folder) {
+  const files = await folderFiles(folder);
+  const meta = files.some(f => f.name === META_NAME) ? await readMeta(folder) : { songs: {} };
+  return { files: files.filter(f => f.name !== META_NAME), meta: meta.songs || {} };
 }
 
 async function handle(req) {
@@ -166,11 +205,11 @@ async function handle(req) {
     case 'library': {
       if (isTeacher) {
         const students = await Promise.all(folders.map(async f => ({
-          id: f.resource_id, name: f.name, key: settings.students[f.resource_id].key, files: await folderFiles(f),
+          id: f.resource_id, name: f.name, key: settings.students[f.resource_id].key, ...(await folderData(f)),
         })));
         return { role: 'teacher', students };
       }
-      return { role: 'student', students: [{ id: own.resource_id, name: own.name, files: await folderFiles(own) }] };
+      return { role: 'student', students: [{ id: own.resource_id, name: own.name, ...(await folderData(own)) }] };
     }
 
     case 'url': {
@@ -211,6 +250,42 @@ async function handle(req) {
       for (const name of req.names || []) {
         await disk('POST', '/resources/copy', { from: filePath(from, name), path: filePath(to, name), overwrite: 'false' }, { okStatuses: [409] });
       }
+      // Перевод, заметки и темп переносим; импульс у каждого ученика свой.
+      const src = (await readMeta(from)).songs?.[req.song];
+      if (src) {
+        const dst = await readMeta(to);
+        dst.songs ||= {};
+        const { impulse, ...rest } = src;
+        dst.songs[req.song] = { ...rest, ...dst.songs[req.song] };
+        await writeMeta(to, dst);
+      }
+      return { ok: true };
+    }
+
+    case 'saveMeta': {
+      const folder = folderById(req.folder);
+      const key = String(req.song || '');
+      if (!key) throw new HttpError(400, 'Не указана песня');
+      const meta = await readMeta(folder);
+      meta.songs ||= {};
+      const entry = meta.songs[key] || {};
+      if (req.remove) {
+        delete meta.songs[key];
+      } else {
+        const patch = cleanPatch(req.patch);
+        const tempo = { ...entry.tempo };
+        for (const [file, t] of Object.entries(patch.tempo || {})) { if (t) tempo[file] = t; else delete tempo[file]; }
+        // Файлы переименованы — переносим их темп.
+        for (const [oldName, newName] of Object.entries(req.renameFiles || {})) {
+          if (tempo[oldName]) { tempo[cleanName(newName, 'Имя файла')] = tempo[oldName]; delete tempo[oldName]; }
+        }
+        const next = { ...entry, ...patch, tempo };
+        for (const k of Object.keys(next)) if (next[k] === '' || (k === 'tempo' && !Object.keys(next[k]).length)) delete next[k];
+        const newKey = req.renameTo ? String(req.renameTo) : key;
+        if (newKey !== key) delete meta.songs[key];
+        if (Object.keys(next).length) meta.songs[newKey] = next; else delete meta.songs[newKey];
+      }
+      await writeMeta(folder, meta);
       return { ok: true };
     }
 
