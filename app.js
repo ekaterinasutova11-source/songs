@@ -301,6 +301,10 @@ const player = (() => {
   audio.addEventListener('loadedmetadata', () => { dur.textContent = fmt(audio.duration); });
   audio.addEventListener('play', () => { playBtn.classList.add('playing'); playBtn.setAttribute('aria-label', 'Пауза'); });
   audio.addEventListener('pause', () => { playBtn.classList.remove('playing'); playBtn.setAttribute('aria-label', 'Играть'); });
+  audio.addEventListener('error', () => {
+    playBtn.classList.remove('playing');
+    bar.classList.remove('busy');
+  });
   audio.addEventListener('waiting', () => bar.classList.add('busy'));
   audio.addEventListener('playing', () => bar.classList.remove('busy'));
 
