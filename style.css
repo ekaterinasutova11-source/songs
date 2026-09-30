@@ -339,3 +339,40 @@ body.saving, body.saving * { cursor: progress !important; }
 .swatch { width: 18px; height: 18px; border-radius: 50%; background: currentColor; display: block; }
 .tool.plain { font-weight: 700; }
 .tool-sep { width: 1px; height: 22px; background: var(--line); margin: 0 4px; }
+
+/* ---------- Редактор v2: черновик + «Сохранить всё» ---------- */
+.song-links[hidden] { display: none; }
+.lyrics .collapse { display: block; margin: 14px 0 0; }
+.editor-title { font-size: 17px !important; color: var(--text) !important; text-transform: none !important; letter-spacing: 0 !important; margin: 0 !important; }
+
+.variant-row {
+  grid-template-columns: auto auto minmax(90px, 1fr) minmax(0, 1fr) auto;
+}
+.variant-row .field { padding: 6px 10px; font-size: 14px; background: var(--surface); }
+.variant-row select.field { width: auto; }
+.variant-row .file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.variant-row.removed { opacity: .55; }
+.variant-row.removed .field, .variant-row.removed .file-name { text-decoration: line-through; }
+.variant-row.new { background: var(--accent-soft); }
+.dot.new { background: var(--accent); }
+.row-progress { grid-column: 1 / -1; margin-top: 2px; height: 4px; }
+.edit-section > .btn { margin-top: 4px; }
+.edit-section > p.small { margin-top: 6px; }
+.edit-section .row + .row { margin-top: 10px; }
+
+.editor-footer {
+  position: sticky; bottom: 0; z-index: 3;
+  display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap;
+  margin: 0 -16px -14px; padding: 12px 16px;
+  background: var(--surface); border-top: 1px solid var(--line);
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+.editor-inner.card .editor-footer { margin: 0 -16px -16px; }
+body.has-player .editor-footer { bottom: 118px; }
+.save-status { margin-right: auto; }
+
+@media (max-width: 600px) {
+  .variant-row { grid-template-columns: auto auto minmax(0, 1fr) auto; }
+  .variant-row .file-name { display: none; }
+  body.has-player .editor-footer { bottom: 172px; }
+}

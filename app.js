@@ -1,5 +1,5 @@
 import { call, setKey, fileUrl, fileText, uploadFile } from './api.js';
-import { groupSongs, variantName, songKey, buildFileName, retitleFileName, AUDIO_EXT } from './parse.js';
+import { groupSongs, variantName, songKey, buildFileName, retitleFileName, parseFileName, AUDIO_EXT } from './parse.js';
 import { NEW_DAYS, NEW_SINCE } from './config.js';
 import { renderLyrics, editorToMarkup, COLORS } from './lyrics.js';
 
@@ -267,38 +267,46 @@ function renderStudent(student) {
 
 // ---------- Карточка песни ----------
 function songCard(song, student, { owner = false } = {}) {
-  const lyricsBox = h('div', { class: 'lyrics', hidden: true });
-  let lyricsLoaded = false;
-  const lyricsBtn = song.lyrics && h('button', {
-    class: 'link-btn', 'aria-expanded': 'false',
-    onclick: async () => {
-      const open = lyricsBox.hidden;
-      lyricsBox.hidden = !open;
-      lyricsBtn.setAttribute('aria-expanded', String(open));
-      lyricsBtn.textContent = open ? 'Скрыть текст' : 'Текст песни';
-      if (open && !lyricsLoaded) {
-        lyricsBox.textContent = 'Загружаю…';
-        try {
-          lyricsBox.innerHTML = renderLyrics(await fileText(student.id, song.lyrics.name));
-          lyricsLoaded = true;
-        } catch (e) { lyricsBox.textContent = e.message; }
-      }
-    },
-  }, 'Текст песни');
-
   const editorKey = `${student.id}|${song.key}`;
-  const editBox = h('div', { class: 'editor', hidden: openEditor !== editorKey });
-  const editBtn = h('button', {
-    class: 'link-btn', onclick: () => {
-      const open = editBox.hidden;
-      editBox.hidden = !open;
-      openEditor = open ? editorKey : null;
-      if (open) editBox.replaceChildren(songEditor(song, student));
-    },
-  }, 'Изменить');
-  if (!editBox.hidden) editBox.replaceChildren(songEditor(song, student));
 
-  return h('article', { class: 'song' },
+  // Текст для чтения: раскрывается и сворачивается (кнопки сверху и снизу текста).
+  const lyricsText = h('div', { class: 'lyrics-text' });
+  const lyricsBox = h('div', { class: 'lyrics', hidden: true },
+    lyricsText,
+    h('button', { class: 'link-btn collapse', onclick: () => { setLyrics(false); card.scrollIntoView({ block: 'nearest' }); } }, 'Свернуть текст ▲'));
+  let lyricsLoaded = false;
+  const lyricsBtn = song.lyrics && h('button', { class: 'link-btn', 'aria-expanded': 'false', onclick: () => setLyrics(lyricsBox.hidden) }, 'Текст песни');
+  async function setLyrics(open) {
+    if (!lyricsBtn) return;
+    lyricsBox.hidden = !open;
+    lyricsBtn.setAttribute('aria-expanded', String(open));
+    lyricsBtn.textContent = open ? 'Свернуть текст' : 'Текст песни';
+    if (open && !lyricsLoaded) {
+      lyricsText.textContent = 'Загружаю…';
+      try {
+        lyricsText.innerHTML = renderLyrics(await fileText(student.id, song.lyrics.name));
+        lyricsLoaded = true;
+      } catch (e) { lyricsText.textContent = e.message; }
+    }
+  }
+
+  // Редактор: пока он открыт, текст для чтения и ссылки скрыты.
+  const editBox = h('div', { class: 'editor', hidden: true });
+  const links = h('div', { class: 'song-links' }, lyricsBtn || null,
+    h('button', { class: 'link-btn', onclick: () => setEditing(true) }, 'Изменить'));
+  function setEditing(on) {
+    openEditor = on ? editorKey : null;
+    editBox.hidden = !on;
+    links.hidden = on;
+    if (on) {
+      setLyrics(false);
+      editBox.replaceChildren(songEditor(song, student, { onClose: () => setEditing(false) }));
+    } else {
+      editBox.replaceChildren();
+    }
+  }
+
+  const card = h('article', { class: 'song' },
     h('div', { class: 'song-head' },
       h('h2', {}, song.title),
       isNew(song.modified) ? h('span', { class: 'badge' }, 'новое') : null,
@@ -310,12 +318,24 @@ function songCard(song, student, { owner = false } = {}) {
           onclick: () => player.play(song, v, student),
         }, variantName(v))))
       : h('p', { class: 'muted' }, 'Нет аудио — добавьте вариант в «Изменить».'),
-    h('div', { class: 'song-links' }, lyricsBtn || null, editBtn),
-    lyricsBox, editBox);
+    links, lyricsBox, editBox);
+  if (openEditor === editorKey) setEditing(true);
+  return card;
 }
 
-// Все файлы песни (аудио + текст) — для переименования, копирования и удаления.
+// Все файлы песни (аудио + текст) — для копирования и удаления.
 const songFiles = song => [...song.variants.map(v => v.file.name), ...(song.lyrics ? [song.lyrics.name] : [])];
+
+// Открытые редакторы с несохранёнными правками — предупреждаем перед уходом со страницы.
+const dirtyEditors = new Set();
+window.addEventListener('beforeunload', e => {
+  if ([...dirtyEditors].some(f => f())) { e.preventDefault(); e.returnValue = ''; }
+});
+
+const kindSelect = value => h('select', { class: 'field kind', 'aria-label': 'Тип' },
+  h('option', { value: 'minus', selected: value === 'minus' }, 'Минус'),
+  h('option', { value: 'plus', selected: value === 'plus' }, 'Плюс'),
+  h('option', { value: 'orig', selected: value === 'orig' }, 'Оригинал'));
 
 // Редактор текста с оформлением: жирный, курсив, подчёркнутый, маркер, цвета.
 function lyricsEditorBox() {
@@ -375,144 +395,197 @@ function lyricsEditorBox() {
   };
 }
 
-function songEditor(song, student) {
+// Редактор песни. Все правки — черновик, пока не нажата «Сохранить всё».
+function songEditor(song, student, { onClose, isNew = false }) {
   const isTeacher = role === 'teacher';
+  const folder = student.id;
 
   // Название
-  const titleInput = h('input', { class: 'field', value: song.title, 'aria-label': 'Название песни' });
-  const saveTitle = () => {
-    const newTitle = titleInput.value.trim();
-    if (!newTitle || newTitle === song.title) return;
-    openEditor = `${student.id}|${songKey(newTitle)}`;
-    mutate(async () => {
-      for (const name of songFiles(song)) {
-        const newName = retitleFileName(name, newTitle);
-        if (newName !== name) await call('rename', { folder: student.id, name, newName });
-      }
-    }, 'Название изменено');
-  };
+  const titleInput = h('input', { class: 'field', value: song.title, placeholder: 'Название песни', 'aria-label': 'Название песни' });
 
   // Текст
   const lyricsEditor = lyricsEditorBox();
+  let lyricsOriginal = '';
+  let lyricsReady = !song.lyrics;
   if (song.lyrics) {
     lyricsEditor.setLoading(true);
-    fileText(student.id, song.lyrics.name)
-      .then(t => lyricsEditor.setValue(t))
+    fileText(folder, song.lyrics.name)
+      .then(t => { lyricsEditor.setValue(t); lyricsOriginal = lyricsEditor.getValue(); lyricsReady = true; })
       .catch(e => toast(e.message, 'error'))
       .finally(() => lyricsEditor.setLoading(false));
   }
-  const saveLyrics = () => mutate(
-    () => call('saveText', { folder: student.id, name: song.lyrics?.name || `${song.title}.txt`, text: lyricsEditor.getValue() }),
-    'Текст сохранён');
-  const lyricsArea = lyricsEditor.el;
+  const lyricsChanged = () => lyricsReady && lyricsEditor.getValue() !== lyricsOriginal;
 
-  // Варианты
-  const variantRows = song.variants.map(v => h('li', { class: 'variant-row' },
-    h('span', { class: `dot ${v.kind}` }), h('span', { class: 'variant-name' }, variantName(v)),
-    h('span', { class: 'muted small' }, v.file.name),
-    h('button', {
-      class: 'btn small ghost', onclick: () => {
-        const label = prompt('Пометка варианта (например: медленный, ниже, короткий). Пусто — без пометки:', v.label);
-        if (label === null) return;
-        const newName = buildFileName(v.title, v.kind, label, extOf(v.file.name));
-        if (newName !== v.file.name) mutate(() => call('rename', { folder: student.id, name: v.file.name, newName }), 'Переименовано');
+  // Уже загруженные варианты: тип, пометка, «удалить».
+  const rows = song.variants.map(v => {
+    const kind = kindSelect(v.kind);
+    const label = h('input', { class: 'field', value: v.label, placeholder: 'Пометка', 'aria-label': 'Пометка' });
+    const row = { v, kind, label, removed: false };
+    const delBtn = h('button', {
+      class: 'btn small ghost danger', type: 'button', onclick: () => {
+        row.removed = !row.removed;
+        li.classList.toggle('removed', row.removed);
+        delBtn.textContent = row.removed ? 'Вернуть' : 'Удалить';
+        kind.disabled = label.disabled = row.removed;
       },
-    }, 'Пометка'),
-    h('button', {
-      class: 'btn small ghost danger', onclick: () => {
-        if (confirm(`Удалить «${variantName(v)}»? Файл уйдёт в корзину Яндекс Диска.`))
-          mutate(() => call('delete', { folder: student.id, name: v.file.name }), 'Удалено');
-      },
-    }, 'Удалить')));
+    }, 'Удалить');
+    const li = h('li', { class: 'variant-row' },
+      h('span', { class: `dot ${v.kind}` }), kind, label,
+      h('span', { class: 'muted small file-name', title: v.file.name }, v.file.name), delBtn);
+    row.li = li;
+    return row;
+  });
+  const rowChanged = r => r.removed || r.kind.value !== r.v.kind || r.label.value.trim() !== r.v.label;
 
-  // Копирование другому ученику
-  let copyBlock = null;
-  if (isTeacher) {
-    const others = library.filter(s => s.id !== student.id);
-    const sel = h('select', { class: 'field' }, others.map(s => h('option', { value: s.id }, s.name)));
-    copyBlock = h('div', { class: 'edit-section' },
-      h('h3', {}, 'Дать эту песню другому ученику'),
-      h('div', { class: 'row' }, sel,
-        h('button', {
-          class: 'btn small', onclick: () => {
-            const to = others.find(s => s.id === sel.value);
-            mutate(() => call('copyTo', { folder: student.id, to: sel.value, names: songFiles(song) }), `Скопировано: ${to.name}`);
-          },
-        }, 'Скопировать')));
+  // Новые файлы: добавляются в список и загружаются при сохранении.
+  const pending = [];
+  const pendingList = h('ul', { class: 'variant-list' });
+  const picker = h('input', {
+    type: 'file', multiple: true, accept: 'audio/*,.mp3,.wav,.m4a,.ogg,.flac', hidden: true,
+    onchange: () => {
+      for (const f of picker.files) {
+        if (!AUDIO_EXT.test(f.name)) { toast(`«${f.name}» — не аудиофайл`, 'error'); continue; }
+        // Если файл уже назван «Песня + (пометка).mp3», подставим тип и пометку сами.
+        const p = parseFileName(f.name);
+        const guessed = p.kind !== 'orig';
+        const item = { file: f, kind: kindSelect(guessed ? p.kind : 'minus'), label: h('input', { class: 'field', value: guessed ? p.label : '', placeholder: 'Пометка: медленный, ниже…', 'aria-label': 'Пометка' }) };
+        item.bar = h('div', { class: 'progress-bar' });
+        item.li = h('li', { class: 'variant-row new' },
+          h('span', { class: 'dot new' }), item.kind, item.label,
+          h('span', { class: 'muted small file-name', title: f.name }, f.name),
+          h('button', {
+            class: 'btn small ghost', type: 'button', 'aria-label': 'Убрать', onclick: () => {
+              pending.splice(pending.indexOf(item), 1);
+              item.li.remove();
+            },
+          }, '✕'),
+          h('div', { class: 'progress row-progress' }, item.bar));
+        pending.push(item);
+        pendingList.append(item.li);
+      }
+      picker.value = '';
+    },
+  });
+
+  const isDirty = () => titleInput.value.trim() !== song.title || lyricsChanged() || rows.some(rowChanged) || pending.length > 0;
+  dirtyEditors.add(isDirty);
+  const close = () => { dirtyEditors.delete(isDirty); onClose(); };
+
+  const status = h('span', { class: 'muted small save-status' });
+  const saveBtn = h('button', { class: 'btn primary', type: 'button', onclick: saveAll }, 'Сохранить всё');
+  const cancelBtn = h('button', {
+    class: 'btn ghost', type: 'button', onclick: () => {
+      if (isDirty() && !confirm('Закрыть без сохранения? Правки пропадут.')) return;
+      close();
+    },
+  }, 'Отмена');
+
+  async function saveAll() {
+    const newTitle = titleInput.value.trim();
+    if (!newTitle) { toast('Напишите название песни', 'error'); return titleInput.focus(); }
+    if (!lyricsReady && song.lyrics) return toast('Подождите, текст ещё загружается', 'error');
+    if (isNew && !pending.length && !lyricsEditor.getValue().trim()) return toast('Добавьте аудиофайл или текст песни', 'error');
+    if (!isDirty()) return close();
+
+    const titleChanged = newTitle !== song.title;
+    saveBtn.disabled = cancelBtn.disabled = true;
+    const step = text => { status.textContent = text; };
+    let failed = false;
+    try {
+      // 1. Удалить отмеченные варианты.
+      for (const r of rows.filter(r => r.removed)) {
+        step(`Удаляю «${variantName(r.v)}»…`);
+        await call('delete', { folder, name: r.v.file.name });
+      }
+      // 2. Переименовать оставшиеся (новое название, тип или пометка).
+      for (const r of rows.filter(r => !r.removed)) {
+        const kindOrLabel = r.kind.value !== r.v.kind || r.label.value.trim() !== r.v.label;
+        const newName = kindOrLabel
+          ? buildFileName(newTitle, r.kind.value, r.label.value, extOf(r.v.file.name))
+          : titleChanged ? retitleFileName(r.v.file.name, newTitle) : r.v.file.name;
+        if (newName !== r.v.file.name) {
+          step(`Переименовываю «${variantName(r.v)}»…`);
+          await call('rename', { folder, name: r.v.file.name, newName });
+        }
+      }
+      // 3. Текст песни.
+      const lyricsName = `${newTitle}.txt`;
+      const text = lyricsEditor.getValue();
+      const oldName = song.lyrics?.name;
+      if (lyricsChanged() || (oldName && oldName !== lyricsName)) {
+        step('Сохраняю текст…');
+        if (!text.trim() && oldName) {
+          await call('delete', { folder, name: oldName });
+        } else if (text.trim()) {
+          await call('saveText', { folder, name: lyricsName, text });
+          if (oldName && oldName !== lyricsName) await call('delete', { folder, name: oldName });
+        }
+      }
+      // 4. Загрузить новые файлы.
+      for (const [i, p] of pending.entries()) {
+        const name = buildFileName(newTitle, p.kind.value, p.label.value, extOf(p.file.name));
+        step(`Загружаю файл ${i + 1} из ${pending.length}…`);
+        try {
+          await uploadFile(folder, name, p.file, x => { p.bar.style.width = `${Math.round(x * 100)}%`; });
+        } catch (e) {
+          throw new Error(e.status === 409 ? `Вариант «${name}» уже есть — поставьте другую пометку` : e.message);
+        }
+      }
+    } catch (e) {
+      failed = true;
+      toast(`Не всё сохранилось: ${e.message}`, 'error');
+    }
+    dirtyEditors.delete(isDirty);
+    // При ошибке оставляем редактор открытым (уже с тем, что успело сохраниться).
+    openEditor = failed ? `${folder}|${songKey(newTitle)}` : null;
+    if (isNew && !failed) onClose();
+    await mutate(async () => {}, failed ? null : 'Сохранено');
   }
 
-  return h('div', { class: 'editor-inner' },
-    h('div', { class: 'edit-section' },
-      h('h3', {}, 'Название'),
-      h('div', { class: 'row' }, titleInput, h('button', { class: 'btn small', onclick: saveTitle }, 'Сохранить'))),
-    h('div', { class: 'edit-section' },
-      h('h3', {}, 'Текст песни'),
-      lyricsArea,
-      h('div', { class: 'row end' }, h('button', { class: 'btn small primary', onclick: saveLyrics }, 'Сохранить текст'))),
+  // Копирование другому ученику и удаление песни — отдельные действия, срабатывают сразу.
+  const extra = [];
+  if (!isNew && isTeacher) {
+    const others = library.filter(s => s.id !== folder);
+    const sel = h('select', { class: 'field' }, others.map(s => h('option', { value: s.id }, s.name)));
+    extra.push(h('div', { class: 'row' }, h('span', { class: 'small' }, 'Дать эту песню ученику:'), sel,
+      h('button', {
+        class: 'btn small', type: 'button', onclick: () => {
+          const to = others.find(s => s.id === sel.value);
+          mutate(() => call('copyTo', { folder, to: sel.value, names: songFiles(song) }), `Скопировано: ${to.name}`);
+        },
+      }, 'Скопировать')));
+  }
+  if (!isNew) {
+    extra.push(h('div', { class: 'row' }, h('button', {
+      class: 'btn small danger', type: 'button', onclick: () => {
+        if (!confirm(`Удалить песню «${song.title}» целиком (все варианты и текст)? Файлы уйдут в корзину Яндекс Диска.`)) return;
+        dirtyEditors.delete(isDirty);
+        openEditor = null;
+        mutate(async () => { for (const name of songFiles(song)) await call('delete', { folder, name }); }, 'Песня удалена');
+      },
+    }, 'Удалить песню целиком')));
+  }
+
+  return h('div', { class: `editor-inner${isNew ? ' card' : ''}` },
+    isNew ? h('h3', { class: 'editor-title' }, 'Новая песня') : null,
+    h('div', { class: 'edit-section' }, h('h3', {}, 'Название'), titleInput),
+    h('div', { class: 'edit-section' }, h('h3', {}, 'Текст песни'), lyricsEditor.el),
     h('div', { class: 'edit-section' },
       h('h3', {}, 'Аудио'),
-      variantRows.length ? h('ul', { class: 'variant-list' }, variantRows) : null,
-      uploadRow(student, song.title)),
-    copyBlock,
-    h('div', { class: 'edit-section' },
-      h('button', {
-        class: 'btn small danger', onclick: () => {
-          if (confirm(`Удалить песню «${song.title}» целиком (все варианты и текст)? Файлы уйдут в корзину Яндекс Диска.`))
-            mutate(async () => {
-              for (const name of songFiles(song)) await call('delete', { folder: student.id, name });
-            }, 'Песня удалена');
-        },
-      }, 'Удалить песню')));
-}
-
-// Строка «добавить аудио»: тип, пометка, файл.
-function uploadRow(student, title, { onDone } = {}) {
-  const kind = h('select', { class: 'field', 'aria-label': 'Тип' },
-    h('option', { value: 'minus' }, 'Минус'),
-    h('option', { value: 'plus' }, 'Плюс'),
-    h('option', { value: 'orig' }, 'Оригинал'));
-  const label = h('input', { class: 'field', placeholder: 'Пометка: медленный, ниже…', 'aria-label': 'Пометка' });
-  const file = h('input', { type: 'file', accept: 'audio/*,.mp3,.wav,.m4a,.ogg,.flac', class: 'file-input' });
-  const progress = h('div', { class: 'progress', hidden: true }, h('div', { class: 'progress-bar' }));
-  const btn = h('button', {
-    class: 'btn small primary', onclick: async () => {
-      const t = typeof title === 'function' ? title() : title;
-      const f = file.files[0];
-      if (!t) return toast('Сначала напишите название песни', 'error');
-      if (!f) return toast('Выберите аудиофайл', 'error');
-      if (!AUDIO_EXT.test(f.name)) return toast('Это не похоже на аудиофайл (нужен mp3, wav, m4a…)', 'error');
-      const name = buildFileName(t, kind.value, label.value, extOf(f.name));
-      btn.disabled = true;
-      progress.hidden = false;
-      try {
-        await uploadFile(student.id, name, f, p => progress.firstChild.style.width = `${Math.round(p * 100)}%`);
-        onDone?.();
-        await mutate(async () => {}, `Загружено: ${name}`);
-      } catch (e) {
-        toast(e.status === 409 ? 'Такой вариант уже есть — поставьте другую пометку' : e.message, 'error');
-        btn.disabled = false;
-        progress.hidden = true;
-      }
-    },
-  }, 'Загрузить');
-  return h('div', { class: 'upload' },
-    h('div', { class: 'row' }, kind, label),
-    h('div', { class: 'row' }, file, btn),
-    progress);
+      rows.length ? h('ul', { class: 'variant-list' }, rows.map(r => r.li)) : null,
+      pendingList,
+      picker,
+      h('button', { class: 'btn small', type: 'button', onclick: () => picker.click() }, '+ Добавить аудиофайл'),
+      h('p', { class: 'muted small' }, 'Файлы загрузятся на Диск, когда вы нажмёте «Сохранить всё».')),
+    extra.length ? h('div', { class: 'edit-section' }, h('h3', {}, 'Другие действия'), ...extra) : null,
+    h('div', { class: 'editor-footer' }, status, cancelBtn, saveBtn));
 }
 
 function addSongForm(student, close) {
-  const title = h('input', { class: 'field', placeholder: 'Название песни', 'aria-label': 'Название песни' });
-  return h('div', { class: 'editor-inner card' },
-    h('h3', {}, 'Новая песня'),
-    title,
-    h('p', { class: 'muted small' }, 'Загрузите первый вариант — остальные варианты и текст можно добавить потом через «Изменить».'),
-    uploadRow(student, () => {
-      const t = title.value.trim();
-      if (t) openEditor = `${student.id}|${songKey(t)}`;
-      return t;
-    }, { onDone: close }),
-    h('div', { class: 'row end' }, h('button', { class: 'btn small ghost', onclick: close }, 'Отмена')));
+  const empty = { title: '', key: '', variants: [], lyrics: null };
+  const form = songEditor(empty, student, { onClose: close, isNew: true });
+  setTimeout(() => form.querySelector('input')?.focus());
+  return form;
 }
 
 // ---------- Плеер ----------
