@@ -448,3 +448,4 @@ body.has-player:has(.player.with-metro) .editor-footer { bottom: 170px; }
   .m-status { flex-basis: 100%; order: 5; }
   body.has-player:has(.player.with-metro) .editor-footer { bottom: 250px; }
 }
+.m-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }

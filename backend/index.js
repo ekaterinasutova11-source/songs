@@ -163,9 +163,11 @@ function cleanPatch(patch = {}) {
   if (patch.tempo && typeof patch.tempo === 'object') {
     out.tempo = {};
     for (const [file, t] of Object.entries(patch.tempo)) {
-      out.tempo[cleanName(file, 'Имя файла')] = t && Number.isFinite(+t.bpm) && +t.bpm > 20 && +t.bpm < 400
-        ? { bpm: Math.round(+t.bpm * 1000) / 1000, offset: Math.round((+t.offset || 0) * 1000) / 1000 }
-        : null;
+      if (!(t && Number.isFinite(+t.bpm) && +t.bpm > 20 && +t.bpm < 400)) { out.tempo[cleanName(file, 'Имя файла')] = null; continue; }
+      const v = { bpm: Math.round(+t.bpm * 1000) / 1000, offset: Math.round((+t.offset || 0) * 1000) / 1000 };
+      if (typeof t.beats === 'string' && /^-?d+(,-?d+)*$/.test(t.beats) && t.beats.length < 20000) v.beats = t.beats;
+      if (t.manual) v.manual = true;
+      out.tempo[cleanName(file, 'Имя файла')] = v;
     }
   }
   return out;

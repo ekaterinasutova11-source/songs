@@ -99,8 +99,7 @@ export async function detectTempo(url, { onProgress } = {}) {
   const tmp = new Ctx();
   const decoded = await tmp.decodeAudioData(data);
   tmp.close();
-  // Для темпа хватает первых 4 минут.
-  const dur = Math.min(decoded.duration, 240);
+  const dur = Math.min(decoded.duration, 480);
   const off = new OfflineAudioContext(1, Math.ceil(dur * SR), SR);
   const src = off.createBufferSource();
   src.buffer = decoded;
@@ -136,9 +135,61 @@ export async function detectTempo(url, { onProgress } = {}) {
     }
     await tick();
   }
-  // Сдвиг первой доли в секундах (половина окна — поправка на положение кадра).
-  // (поправка +30 мс подобрана по тестовым записям с известными долями)
-  const offset = (best.phase + FFT / HOP / 2) / FPS + 0.03;
+  // Кадр → секунды: половина окна — поправка на положение кадра,
+  // +30 мс подобраны по тестовым записям с известными долями.
+  const toSec = f => (f + FFT / HOP / 2) / FPS + 0.03;
   const period = 60 / best.bpm;
-  return { bpm: Math.round(best.bpm * 100) / 100, offset: Math.round((offset % period) * 1000) / 1000 };
+  const offset = toSec(best.phase);
+  let bpm = best.bpm;
+  let frames = trackBeats(env, 60 * FPS / bpm);
+
+  // Проверка «не восьмые ли это»: если каждая вторая найденная доля заметно слабее
+  // (или темп неправдоподобно быстрый), настоящие доли — через одну.
+  const strength = f => { let m = 0; for (let i = Math.max(0, f - 2); i <= Math.min(env.length - 1, f + 2); i++) m = Math.max(m, env[i]); return m; };
+  const parityMean = p => { let s = 0, n = 0; frames.forEach((f, i) => { if (i % 2 === p) { s += strength(f); n++; } }); return n ? s / n : 0; };
+  const even = parityMean(0), odd = parityMean(1);
+  if (frames.length > 8 && bpm / 2 >= 50 && (Math.min(even, odd) < 0.6 * Math.max(even, odd) || bpm > 175)) {
+    const keep = even >= odd ? 0 : 1;
+    frames = frames.filter((_, i) => i % 2 === keep);
+    bpm /= 2;
+  }
+  const beats = frames.map(toSec);
+  const p = 60 / bpm;
+  return {
+    bpm: Math.round(bpm * 100) / 100,
+    offset: Math.round(((beats[0] ?? offset) % p) * 1000) / 1000,
+    beats,
+  };
+}
+
+// Поиск каждой доли отдельно (динамическое программирование, метод Эллиса):
+// доли должны стоять на сильных атаках, а расстояние между соседними — быть близким к периоду.
+// Так метроном следует за живой музыкой, даже если темп немного «дышит».
+function trackBeats(env, period) {
+  const n = env.length;
+  if (n < period * 4) return [];
+  let mean = 0, sq = 0;
+  for (const v of env) { mean += v; sq += v * v; }
+  mean /= n;
+  const std = Math.sqrt(sq / n - mean * mean) || 1;
+  const o = Float32Array.from(env, v => v / std);
+  const TIGHT = 100;
+  const score = new Float32Array(n), from = new Int32Array(n).fill(-1);
+  const lo = Math.round(period / 2), hi = Math.round(period * 2);
+  for (let t = 0; t < n; t++) {
+    let best = 0, arg = -1;
+    for (let p = t - hi; p <= t - lo; p++) {
+      if (p < 0) continue;
+      const c = score[p] - TIGHT * Math.log((t - p) / period) ** 2;
+      if (arg < 0 || c > best) { best = c; arg = p; }
+    }
+    score[t] = o[t] + (arg >= 0 ? best : 0);
+    from[t] = arg;
+  }
+  // Последняя доля — лучшая точка среди последних двух периодов.
+  let t = n - 1;
+  for (let i = Math.max(0, n - Math.round(period * 2)); i < n; i++) if (score[i] > score[t]) t = i;
+  const beats = [];
+  for (; t >= 0; t = from[t]) beats.push(t);
+  return beats.reverse();
 }

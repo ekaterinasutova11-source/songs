@@ -1,5 +1,11 @@
 // Метроном, привязанный к времени внутри записи: щелчки попадают в доли песни
 // при любой скорости воспроизведения, после перемотки и паузы.
+//
+// Доли берутся либо из списка (найдены по записи и «дышат» вместе с музыкой),
+// либо из ровной сетки (темп + сдвиг) — например, если темп настучали вручную.
+//
+// Музыка и щелчки идут через один AudioContext, поэтому у них одинаковая задержка
+// вывода (важно для Bluetooth-наушников, где она бывает 0,1–0,3 с).
 
 export class Metronome {
   constructor(audio) {
@@ -8,18 +14,74 @@ export class Metronome {
     this.gain = null;
     this.bpm = 0;
     this.offset = 0;
+    this.beats = null;      // список долей в секундах записи или null
     this.on = false;
     this.volume = 0.6;
     this.timer = null;
-    this.nextBeat = null; // номер следующей доли, которую ещё не запланировали
-    this.onBeat = null;   // (номер доли) → для мигающего индикатора
-    for (const ev of ['seeking', 'seeked', 'play', 'ratechange']) audio.addEventListener(ev, () => { this.nextBeat = null; });
+    this.lastScheduled = -Infinity;
+    this.onBeat = null;
+    for (const ev of ['seeking', 'seeked', 'play', 'ratechange']) audio.addEventListener(ev, () => this.reset());
+    audio.addEventListener('play', () => this.ctx?.resume());
   }
 
-  setTempo(bpm, offset) {
+  reset() { this.lastScheduled = -Infinity; }
+
+  setGrid(bpm, offset) {
     this.bpm = bpm;
     this.offset = offset;
-    this.nextBeat = null;
+    this.beats = null;
+    this.reset();
+  }
+
+  setBeats(beats, bpm) {
+    this.beats = beats?.length ? beats : null;
+    this.bpm = bpm;
+    this.offset = beats?.[0] || 0;
+    this.reset();
+  }
+
+  // ½: оставить каждую вторую долю; ×2: добавить доли посередине.
+  half() {
+    if (this.beats) this.beats = this.beats.filter((_, i) => i % 2 === 0);
+    this.bpm /= 2;
+    this.reset();
+  }
+
+  double() {
+    if (this.beats) {
+      const out = [];
+      this.beats.forEach((b, i) => { out.push(b); if (i + 1 < this.beats.length) out.push((b + this.beats[i + 1]) / 2); });
+      this.beats = out;
+    }
+    this.bpm *= 2;
+    this.offset %= 60 / this.bpm;
+    this.reset();
+  }
+
+  // Сдвинуть все доли так, чтобы ближайшая оказалась в момент нажатия.
+  alignTo(t) {
+    if (this.beats) {
+      const i = this.nearestIndex(t);
+      const delta = t - this.beats[i];
+      this.beats = this.beats.map(b => b + delta);
+    } else if (this.bpm) {
+      const period = 60 / this.bpm;
+      this.offset = ((t % period) + period) % period;
+    }
+    this.reset();
+  }
+
+  nearestIndex(t) {
+    const b = this.beats;
+    let lo = 0, hi = b.length - 1;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (b[mid] < t) lo = mid + 1; else hi = mid; }
+    return lo > 0 && Math.abs(b[lo - 1] - t) < Math.abs(b[lo] - t) ? lo - 1 : lo;
+  }
+
+  // Момент, который слушатель слышит прямо сейчас (с учётом задержки вывода).
+  heardTime() {
+    const lag = (this.ctx?.outputLatency || 0) + (this.ctx?.baseLatency || 0);
+    return this.audio.currentTime - lag * (this.audio.playbackRate || 1);
   }
 
   setVolume(v) {
@@ -35,10 +97,14 @@ export class Metronome {
       this.gain = this.ctx.createGain();
       this.gain.gain.value = this.volume;
       this.gain.connect(this.ctx.destination);
+      // Пускаем музыку через тот же AudioContext (нужен crossOrigin у <audio>).
+      try {
+        this.ctx.createMediaElementSource(this.audio).connect(this.ctx.destination);
+      } catch { /* уже подключено или браузер не умеет — щелчки всё равно будут */ }
     }
     this.ctx.resume();
     this.on = true;
-    this.nextBeat = null;
+    this.reset();
     clearInterval(this.timer);
     this.timer = setInterval(() => this.schedule(), 25);
   }
@@ -48,23 +114,10 @@ export class Metronome {
     clearInterval(this.timer);
   }
 
-  // «Попасть в долю»: пользователь нажимает в момент доли — сдвигаем сетку к этому месту.
-  tap() {
-    if (!this.bpm) return;
-    const period = 60 / this.bpm;
-    this.offset = ((this.audio.currentTime - this.outputLag()) % period + period) % period;
-    this.nextBeat = null;
-    return this.offset;
-  }
-
-  outputLag() {
-    return (this.ctx?.outputLatency || 0) + (this.ctx?.baseLatency || 0);
-  }
-
-  click(when, accent) {
+  click(when) {
     const osc = this.ctx.createOscillator();
     const env = this.ctx.createGain();
-    osc.frequency.value = accent ? 1600 : 1100;
+    osc.frequency.value = 1300;
     env.gain.setValueAtTime(0, when);
     env.gain.linearRampToValueAtTime(1, when + 0.001);
     env.gain.exponentialRampToValueAtTime(0.001, when + 0.05);
@@ -73,25 +126,59 @@ export class Metronome {
     osc.stop(when + 0.06);
   }
 
+  // Доли в промежутке [a, b] времени записи.
+  beatsBetween(a, b) {
+    const out = [];
+    if (this.beats) {
+      const list = this.beats;
+      let i = this.nearestIndex(a);
+      if (list[i] < a) i++;
+      for (; i < list.length && list[i] <= b; i++) out.push(list[i]);
+      // После последней найденной доли продолжаем ровной сеткой.
+      const last = list[list.length - 1];
+      if (b > last && this.bpm) {
+        const period = 60 / this.bpm;
+        for (let t = last + period * Math.max(1, Math.ceil((a - last) / period)); t <= b; t += period) out.push(t);
+      }
+    } else if (this.bpm) {
+      const period = 60 / this.bpm;
+      for (let k = Math.ceil((a - this.offset) / period); ; k++) {
+        const t = this.offset + k * period;
+        if (t > b) break;
+        out.push(t);
+      }
+    }
+    return out;
+  }
+
   schedule() {
     const a = this.audio;
     if (!this.on || !this.bpm || a.paused || a.seeking || !this.ctx) return;
     const rate = a.playbackRate || 1;
-    const period = 60 / this.bpm;
     const now = a.currentTime;
-    const ahead = 0.12 * rate; // планируем на 120 мс вперёд
-    const first = Math.ceil((now - this.offset) / period - 1e-6);
-    if (this.nextBeat === null || this.nextBeat < first) this.nextBeat = first;
-    for (;;) {
-      const t = this.offset + this.nextBeat * period;
-      if (t > now + ahead) break;
-      if (t >= now - 0.01 && t <= a.duration) {
-        const when = this.ctx.currentTime + (t - now) / rate;
-        this.click(Math.max(when, this.ctx.currentTime), false);
-        const n = this.nextBeat;
-        if (this.onBeat) setTimeout(() => this.onBeat(n), Math.max(0, (when - this.ctx.currentTime) * 1000));
-      }
-      this.nextBeat++;
+    for (const t of this.beatsBetween(Math.max(now - 0.01, this.lastScheduled + 1e-3), now + 0.12 * rate)) {
+      if (t > a.duration) break;
+      const when = Math.max(this.ctx.currentTime, this.ctx.currentTime + (t - now) / rate);
+      this.click(when);
+      this.lastScheduled = t;
+      if (this.onBeat) setTimeout(this.onBeat, Math.max(0, (when - this.ctx.currentTime) * 1000));
     }
   }
+}
+
+// «Настучать»: по нажатиям в такт (время записи) находим темп и положение долей.
+export function fitTaps(taps) {
+  if (taps.length < 4) return null;
+  const iv = taps.slice(1).map((t, i) => t - taps[i]).sort((x, y) => x - y);
+  const med = iv[iv.length >> 1];
+  if (!(med > 0.2 && med < 2)) return null;
+  // Номер доли для каждого нажатия (на случай пропущенного удара).
+  const k = taps.map(t => Math.round((t - taps[0]) / med));
+  const n = taps.length;
+  const mk = k.reduce((s, x) => s + x, 0) / n, mt = taps.reduce((s, x) => s + x, 0) / n;
+  let num = 0, den = 0;
+  taps.forEach((t, i) => { num += (k[i] - mk) * (t - mt); den += (k[i] - mk) ** 2; });
+  const period = den ? num / den : med;
+  const offset = mt - mk * period;
+  return { bpm: 60 / period, offset: ((offset % period) + period) % period };
 }

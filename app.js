@@ -2,7 +2,7 @@ import { call, setKey, fileUrl, fileText, uploadFile } from './api.js';
 import { groupSongs, variantName, songKey, buildFileName, retitleFileName, parseFileName, AUDIO_EXT } from './parse.js';
 import { NEW_DAYS, NEW_SINCE } from './config.js';
 import { renderLyrics, editorToMarkup, COLORS } from './lyrics.js';
-import { Metronome } from './metronome.js';
+import { Metronome, fitTaps } from './metronome.js';
 import { detectTempo } from './tempo.js';
 
 const main = document.getElementById('main');
@@ -695,6 +695,7 @@ function addSongForm(student, close) {
 // ---------- Плеер ----------
 const player = (() => {
   const audio = new Audio();
+  audio.crossOrigin = 'anonymous'; // чтобы музыку можно было пустить через тот же звуковой путь, что и метроном
   audio.preload = 'auto';
   const bar = document.getElementById('player');
   const $ = sel => bar.querySelector(sel);
@@ -763,37 +764,48 @@ const player = (() => {
   const metro = new Metronome(audio);
   const metroBtn = $('.p-metro-btn'), metroBox = $('.p-metro');
   const mBpm = metroBox.querySelector('.m-bpm'), mStatus = metroBox.querySelector('.m-status'), mDot = metroBox.querySelector('.m-dot');
+  const tapBtn = metroBox.querySelector('[data-act="tapTempo"]');
   let tempoToken = 0, saveTimer = null;
 
-  const showBpm = () => {
+  // Доли храним компактно: миллисекунды, каждая следующая — разницей с предыдущей.
+  const encodeBeats = beats => beats.map((t, i) => Math.round(t * 1000) - (i ? Math.round(beats[i - 1] * 1000) : 0)).join(',');
+  const decodeBeats = str => { let acc = 0; return str.split(',').map(x => (acc += Number(x)) / 1000); };
+
+  const showBpm = (note = '') => {
     if (!metro.bpm) return;
     const rate = audio.playbackRate || 1;
     mBpm.textContent = `♩ = ${Math.round(metro.bpm)}`;
-    mStatus.textContent = rate !== 1 ? `сейчас ${Math.round(metro.bpm * rate)} при ${rate}×` : '';
+    mStatus.textContent = note || (rate !== 1 ? `сейчас ${Math.round(metro.bpm * rate)} при ${rate}×` : '');
   };
 
   // Темп каждого файла определяется один раз и запоминается в данных песни.
-  async function loadTempo() {
+  async function loadTempo(force = false) {
     const cur = current;
     if (!cur?.url) return;
     const my = ++tempoToken;
     const saved = cur.song.meta?.tempo?.[cur.v.file.name];
-    if (saved) { metro.setTempo(saved.bpm, saved.offset); return showBpm(); }
-    metro.setTempo(0, 0);
+    if (saved && !force && (saved.manual || saved.beats)) {
+      if (saved.beats) metro.setBeats(decodeBeats(saved.beats), saved.bpm);
+      else metro.setGrid(saved.bpm, saved.offset);
+      return showBpm(saved.manual ? 'настучано вручную' : '');
+    }
+    metro.setGrid(0, 0);
     mBpm.textContent = '♩ = …';
     try {
       const t = await detectTempo(cur.url, { onProgress: text => { if (my === tempoToken) mStatus.textContent = text; } });
       if (my !== tempoToken) return;
-      metro.setTempo(t.bpm, t.offset);
+      metro.setBeats(t.beats, t.bpm);
       showBpm();
       rememberTempo(cur);
     } catch (e) {
-      if (my === tempoToken) { mBpm.textContent = '♩ = ?'; mStatus.textContent = 'Не получилось определить темп'; }
+      if (my === tempoToken) { mBpm.textContent = '♩ = ?'; mStatus.textContent = 'Не получилось определить темп — попробуйте «Настучать»'; }
     }
   }
 
-  function rememberTempo(cur = current, delay = 0) {
+  function rememberTempo(cur = current, delay = 0, manual = false) {
     const t = { bpm: metro.bpm, offset: metro.offset };
+    if (metro.beats) t.beats = encodeBeats(metro.beats);
+    if (manual) t.manual = true;
     cur.song.meta ||= {};
     cur.song.meta.tempo = { ...cur.song.meta.tempo, [cur.v.file.name]: t };
     clearTimeout(saveTimer);
@@ -816,23 +828,47 @@ const player = (() => {
     bar.classList.toggle('with-metro', metro.on);
   });
 
+  // «Настучать»: нажимайте в такт музыке; после 8 нажатий (или паузы) темп готов.
+  let taps = [], tapTimer = null;
+  function finishTaps() {
+    clearTimeout(tapTimer);
+    const fit = fitTaps(taps);
+    taps = [];
+    tapBtn.textContent = 'Настучать';
+    tapBtn.classList.remove('active');
+    if (!fit) return showBpm('Не получилось — стучите ровно, хотя бы 4 раза');
+    metro.setGrid(fit.bpm, fit.offset);
+    showBpm('настучано вручную');
+    rememberTempo(current, 0, true);
+  }
+
   metroBox.addEventListener('click', e => {
     const act = e.target.closest('[data-act]')?.dataset.act;
-    if (!act || !metro.bpm || !current) return;
-    if (act === 'half') metro.setTempo(metro.bpm / 2, metro.offset % (120 / metro.bpm));
-    if (act === 'double') metro.setTempo(metro.bpm * 2, metro.offset % (30 / metro.bpm));
-    if (act === 'minus') metro.setTempo(Math.round(metro.bpm) - 1, metro.offset);
-    if (act === 'plus') metro.setTempo(Math.round(metro.bpm) + 1, metro.offset);
-    if (act === 'tap') {
+    if (!act || !current) return;
+    if (act === 'tapTempo') {
+      if (audio.paused) return toast('Включите песню и стучите по кнопке в такт');
+      taps.push(metro.heardTime());
+      tapBtn.classList.add('active');
+      tapBtn.textContent = `Ещё… ${taps.length}/8`;
+      clearTimeout(tapTimer);
+      if (taps.length >= 8) return finishTaps();
+      tapTimer = setTimeout(finishTaps, 2500);
+      return;
+    }
+    if (act === 'auto') return loadTempo(true);
+    if (!metro.bpm) return;
+    if (act === 'half') metro.half();
+    if (act === 'double') metro.double();
+    if (act === 'align') {
       if (audio.paused) return toast('Включите песню и нажмите точно в момент доли');
-      metro.tap();
+      metro.alignTo(metro.heardTime());
     }
     showBpm();
-    rememberTempo(current, 1500);
+    rememberTempo(current, 1500, !!current.song.meta?.tempo?.[current.v.file.name]?.manual);
   });
   metroBox.querySelector('.m-vol').addEventListener('input', e => metro.setVolume(Number(e.target.value)));
   metro.onBeat = () => { mDot.classList.remove('beat'); void mDot.offsetWidth; mDot.classList.add('beat'); };
-  audio.addEventListener('ratechange', showBpm);
+  audio.addEventListener('ratechange', () => showBpm());
 
   playBtn.addEventListener('click', () => (audio.paused ? audio.play() : audio.pause()));
   $('.p-back').addEventListener('click', () => { audio.currentTime = Math.max(0, audio.currentTime - 5); });
