@@ -24,8 +24,8 @@ export class Metronome {
     this.visualTimers = new Set();
     this.source = null;
     this.previousAudioTime = null;
-    for (const ev of ['seeking', 'seeked', 'play', 'pause', 'waiting', 'playing', 'ended', 'emptied', 'ratechange']) audio.addEventListener(ev, () => this.reset());
-    audio.addEventListener('play', () => this.ctx?.resume());
+    for (const ev of ['seeking', 'seeked', 'play', 'pause', 'waiting', 'playing', 'ended', 'emptied', 'ratechange']) audio?.addEventListener(ev, () => this.reset());
+    audio?.addEventListener('play', () => this.ctx?.resume());
   }
 
   reset() {
@@ -118,7 +118,7 @@ export class Metronome {
       this.gain.gain.value = this.volume;
       this.gain.connect(this.ctx.destination);
       // Пускаем музыку через тот же AudioContext (нужен crossOrigin у <audio>).
-      try {
+      if (this.audio) try {
         this.source = this.ctx.createMediaElementSource(this.audio);
         this.source.connect(this.ctx.destination);
       } catch { /* уже подключено или браузер не умеет — щелчки всё равно будут */ }
@@ -185,6 +185,36 @@ export class Metronome {
       this.lastScheduled = t;
       if (this.onBeat) {
         const timer = setTimeout(() => { this.visualTimers.delete(timer); this.onBeat?.(); }, Math.max(0, (when - this.ctx.currentTime) * 1000));
+        this.visualTimers.add(timer);
+      }
+    }
+  }
+}
+
+// Самостоятельный метроном: его часы — AudioContext, аудиозапись не нужна.
+export class StandaloneMetronome extends Metronome {
+  constructor() { super(null); this.setTempo(120); }
+
+  setTempo(bpm) {
+    if (!Number.isFinite(bpm) || bpm < 1 || bpm > 999) throw new RangeError('Темп — от 1 до 999 BPM');
+    this.setGrid(bpm, (this.ctx?.currentTime || 0) + 0.04);
+  }
+
+  start() {
+    super.start();
+    this.offset = this.ctx.currentTime + 0.04;
+    this.schedule();
+  }
+
+  schedule() {
+    if (!this.on || !this.bpm || this.ctx?.state !== 'running') return;
+    const now = this.ctx.currentTime;
+    // После долгой задержки вкладки пропускаем старые удары без пачки щелчков.
+    for (const t of this.beatsBetween(Math.max(now, this.lastScheduled + 1e-5), now + 0.12)) {
+      this.click(t);
+      this.lastScheduled = t;
+      if (this.onBeat) {
+        const timer = setTimeout(() => { this.visualTimers.delete(timer); this.onBeat?.(); }, Math.max(0, (t - now) * 1000));
         this.visualTimers.add(timer);
       }
     }

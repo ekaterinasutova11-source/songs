@@ -2,7 +2,7 @@ import { call, setKey, fileUrl, fileText, uploadFile } from './api.js';
 import { groupSongs, variantName, songKey, buildFileName, retitleFileName, parseFileName, AUDIO_EXT } from './parse.js';
 import { NEW_DAYS, NEW_SINCE } from './config.js';
 import { renderLyrics, editorToMarkup, COLORS } from './lyrics.js';
-import { Metronome, fitTaps } from './metronome.js?v=metro3';
+import { Metronome, StandaloneMetronome, fitTaps } from './metronome.js?v=standalone1';
 import { detectTempo, TEMPO_VERSION } from './tempo.js?v=metro3';
 
 const main = document.getElementById('main');
@@ -101,17 +101,20 @@ function showState(...children) {
 async function route(force = false, quiet = false) {
   const hash = location.hash.replace(/^#\/?/, '');
   const m = hash.match(/^([ts])\/([\w-]{8,})(?:\/s\/(.+))?$/);
-  if (!m) return hash ? renderOldLink() : renderLanding();
+  if (!m) { standalone.setVisible(false); return hash ? renderOldLink() : renderLanding(); }
   const [, mode, key, folder] = m;
+  if (mode !== 't' || libraryKey !== key) standalone.setVisible(false);
   if (!quiet || !library) showState(h('div', { class: 'spinner' }), 'Загружаю песни…');
   try {
     await ensureLibrary(key, force);
   } catch (e) {
+    if (e.status === 403) standalone.setVisible(false);
     return showState(
       h('p', {}, e.status === 403 ? 'Эта ссылка не работает.' : 'Не получилось загрузить песни.'),
       h('p', { class: 'muted' }, e.message),
       e.status === 403 ? null : h('button', { class: 'btn', onclick: () => route(true) }, 'Попробовать снова'));
   }
+  standalone.setVisible(role === 'teacher' && mode === 't');
   if (role === 'student' || mode === 's') return renderStudent(library[0]);
   if (folder) {
     const s = library.find(x => x.id === decodeURIComponent(folder));
@@ -842,6 +845,7 @@ const player = (() => {
       cancelTempo();
       cancelTaps();
     } else {
+      standalone.stop();
       metro.start();
       loadTempo();
     }
@@ -963,7 +967,52 @@ const player = (() => {
   // После перерисовки страницы подсветить играющий вариант.
   new MutationObserver(markActive).observe(main, { childList: true, subtree: true });
 
-  return { play };
+  return { play, stopSongMetronome() { if (metro.on) metroBtn.click(); } };
+})();
+
+// Виджет находится вне перерисовываемой библиотеки и остаётся на экране
+// при поиске, прокрутке, переходах к ученикам и закрытии плеера.
+const standalone = (() => {
+  const metro = new StandaloneMetronome();
+  const storedTempo = Number(localGet('songs:standalone:bpm'));
+  metro.setTempo(storedTempo >= 1 && storedTempo <= 999 ? storedTempo : 120);
+  const storedVolume = localGet('songs:standalone:volume');
+  const volume = storedVolume === null ? 0.6 : Number(storedVolume);
+  metro.setVolume(Number.isFinite(volume) && volume >= 0 && volume <= 1 ? volume : 0.6);
+  const dot = h('span', { class: 'm-dot', 'aria-hidden': 'true' });
+  const bpm = h('input', { class: 'standalone-bpm', type: 'text', inputmode: 'decimal', value: metro.bpm, 'aria-label': 'Темп самостоятельного метронома', title: 'От 1 до 999 BPM, можно вводить дробное число' });
+  const toggle = h('button', { class: 'btn primary small', type: 'button', 'aria-pressed': 'false', onclick: () => {
+    if (metro.on) return stop();
+    if (!setTempo(bpm.value)) return;
+    try { player.stopSongMetronome(); metro.start(); update(); }
+    catch (e) { stop(); toast('Не удалось включить метроном: ' + e.message, 'error'); }
+  } }, 'Запустить');
+  const widget = h('section', { class: 'standalone-widget', hidden: true, 'aria-label': 'Самостоятельный метроном' },
+    h('div', { class: 'standalone-inner' },
+      h('div', { class: 'standalone-title' }, dot, h('strong', {}, 'Метроном'), h('span', { class: 'muted small' }, 'без песни')),
+      h('div', { class: 'standalone-controls' },
+        h('button', { class: 'm-btn', type: 'button', 'aria-label': 'Уменьшить самостоятельный темп на 1', onclick: () => setTempo(Math.max(1, metro.bpm - 1)) }, '−'),
+        h('label', { class: 'm-tempo' }, bpm, 'BPM'),
+        h('button', { class: 'm-btn', type: 'button', 'aria-label': 'Увеличить самостоятельный темп на 1', onclick: () => setTempo(Math.min(999, metro.bpm + 1)) }, '+'),
+        toggle,
+        h('input', { class: 'm-vol', type: 'range', min: 0, max: 1, step: 0.05, value: metro.volume, 'aria-label': 'Громкость самостоятельного метронома', oninput: e => {
+          metro.setVolume(Number(e.target.value)); localSet('songs:standalone:volume', metro.volume);
+        } }))));
+  main.before(widget);
+  function update() { toggle.textContent = metro.on ? 'Остановить' : 'Запустить'; toggle.setAttribute('aria-pressed', String(metro.on)); }
+  function stop() { metro.stop(); dot.classList.remove('beat'); update(); }
+  function setTempo(value) {
+    const number = Number(String(value).replace(',', '.'));
+    if (!Number.isFinite(number) || number < 1 || number > 999) {
+      bpm.value = String(metro.bpm); toast('Введите темп от 1 до 999 BPM'); return false;
+    }
+    metro.setTempo(number); bpm.value = String(number); localSet('songs:standalone:bpm', number); return true;
+  }
+  bpm.addEventListener('change', () => setTempo(bpm.value));
+  bpm.addEventListener('keydown', e => { if (e.key === 'Enter') { setTempo(bpm.value); bpm.blur(); } });
+  metro.onBeat = () => { dot.classList.remove('beat'); void dot.offsetWidth; dot.classList.add('beat'); };
+  window.addEventListener('pagehide', stop);
+  return { stop, setVisible(visible) { widget.hidden = !visible; if (!visible) stop(); } };
 })();
 
 route();
