@@ -437,6 +437,8 @@ body.has-player .editor-footer { bottom: 118px; }
 .m-btn:hover { border-color: var(--muted); }
 .m-btn.wide { font-weight: 500; }
 .m-vol { width: 90px; accent-color: var(--accent); }
+.m-tempo { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+.m-bpm-input { width: 70px; height: 32px; border: 1px solid var(--line); border-radius: 8px; padding: 0 6px; background: var(--surface); color: var(--text); font: inherit; }
 .m-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--line); }
 .m-dot.beat { animation: beat .18s ease-out; }
 @keyframes beat { from { background: var(--accent); transform: scale(1.35); } to { background: var(--line); transform: scale(1); } }

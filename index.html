@@ -8,7 +8,7 @@
   <!-- Яндекс Диск не отдаёт файлы, если в запросе указан адрес github.io -->
   <meta name="referrer" content="no-referrer">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎵</text></svg>">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=metro2">
 </head>
 <body>
   <main id="main"></main>
@@ -36,11 +36,15 @@
       <span class="m-bpm">…</span>
       <span class="m-status muted small"></span>
       <span class="m-tools">
+        <label class="m-tempo">BPM <input class="m-bpm-input" type="text" inputmode="decimal" aria-label="Точный темп BPM" title="Точный темп фонограммы. После ввода нажмите «Попасть в долю»." placeholder="120"></label>
         <button class="m-btn" data-act="half" title="Вдвое медленнее">½</button>
         <button class="m-btn" data-act="double" title="Вдвое быстрее">×2</button>
         <button class="m-btn wide" data-act="align" title="Во время песни нажмите точно на долю — щелчки сдвинутся туда">Попасть в долю</button>
+        <button class="m-btn" data-act="earlier" title="Щелчки на 10 мс раньше" aria-label="Щелчки на 10 миллисекунд раньше">−10 мс</button>
+        <button class="m-btn" data-act="later" title="Щелчки на 10 мс позже" aria-label="Щелчки на 10 миллисекунд позже">+10 мс</button>
         <button class="m-btn wide" data-act="tapTempo" title="Постучите по кнопке в такт 6–8 раз — сайт возьмёт ваш темп">Настучать</button>
         <button class="m-btn wide" data-act="auto" title="Определить темп по записи заново">Авто</button>
+        <button class="m-btn wide" data-act="save" hidden title="Сохранить проверенные доли этой записи для учеников">Сохранить доли</button>
         <input class="m-vol" type="range" min="0" max="1" step="0.05" value="0.6" aria-label="Громкость метронома" title="Громкость метронома">
       </span>
     </div>
@@ -71,6 +75,6 @@
     </div>
   </div>
 
-  <script type="module" src="app.js"></script>
+  <script type="module" src="app.js?v=metro2"></script>
 </body>
 </html>

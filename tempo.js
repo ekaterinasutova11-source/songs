@@ -5,9 +5,12 @@
 //    чтобы сетка долей точнее всего совпадала с атаками на протяжении всей песни.
 
 const SR = 11025;
-const FFT = 1024;
+// Короткое окно уменьшает опережение атак: длинное окно замечало
+// удар задолго до его центра и требовало произвольного сдвига щелчков.
+const FFT = 512;
 const HOP = 128;
 const FPS = SR / HOP; // ≈ 86 кадров в секунду
+export const TEMPO_VERSION = 2;
 
 const tick = () => new Promise(r => setTimeout(r));
 
@@ -85,87 +88,126 @@ function gridScore(env, period) {
     const phase = period * s / steps;
     let sum = 0, n = 0;
     for (let x = phase; x < env.length - 1; x += period) { sum += at(env, x); n++; }
-    const score = n ? sum / n : 0;
+    // Среднее по долям предпочитало половинный темп: он мог пропускать
+    // половину столь же сильных атак без какого-либо штрафа.
+    const score = n ? sum / Math.sqrt(n) : 0;
     if (score > best) { best = score; bestPhase = phase; }
   }
   return { score: best, phase: bestPhase };
 }
 
-export async function detectTempo(url, { onProgress } = {}) {
+export async function detectTempo(url, { onProgress, signal } = {}) {
   onProgress?.('Скачиваю запись…');
-  const data = await (await fetch(url)).arrayBuffer();
+  const response = await fetch(url, { signal });
+  if (!response.ok) throw new Error(`Не удалось загрузить запись (${response.status})`);
+  const data = await response.arrayBuffer();
   onProgress?.('Слушаю ритм…');
   const Ctx = window.AudioContext || window.webkitAudioContext;
   const tmp = new Ctx();
-  const decoded = await tmp.decodeAudioData(data);
-  tmp.close();
-  const dur = Math.min(decoded.duration, 480);
+  let decoded;
+  try { decoded = await tmp.decodeAudioData(data); } finally { await tmp.close(); }
+  signal?.throwIfAborted();
+  const dur = decoded.duration;
   const off = new OfflineAudioContext(1, Math.ceil(dur * SR), SR);
   const src = off.createBufferSource();
   src.buffer = decoded;
   src.connect(off.destination);
   src.start();
   const mono = (await off.startRendering()).getChannelData(0);
-  const env = await onsetEnvelope(mono);
-  await tick();
+  return analyzeSamples(mono, { signal });
+}
 
-  // Автокорреляция по периодам 60–200 BPM с лёгким предпочтением 90–130 BPM.
-  const minLag = Math.floor(FPS * 60 / 200), maxLag = Math.ceil(FPS * 60 / 60);
+// Отдельный вход для проверки на сигналах с заранее известным ритмом.
+export async function analyzeSamples(mono, { signal } = {}) {
+  const env = await onsetEnvelope(mono);
+  signal?.throwIfAborted();
+  return analyzeOnsets(env, { signal });
+}
+
+export async function analyzeOnsets(env, { signal } = {}) {
+  await tick();
+  let energy = 0;
+  for (const v of env) energy += v * v;
+  if (env.length < FPS * 4 || energy < 1e-8) throw new Error('В записи нет достаточно отчётливого ритма');
+  // Больше не превращаем быстрые песни в медленные по одному порогу BPM.
+  // Рассматриваем несколько локальных максимумов, а не единственный период.
+  const minLag = Math.floor(FPS * 60 / 240), maxLag = Math.ceil(FPS * 60 / 45);
   let bestLag = minLag, bestVal = -Infinity;
+  const candidates = [];
   const ac = new Float32Array(maxLag + 2);
   for (let lag = minLag; lag <= maxLag + 1; lag++) {
     let s = 0;
     for (let i = 0; i + lag < env.length; i++) s += env[i] * env[i + lag];
-    ac[lag] = s / (env.length - lag);
+    ac[lag] = s / Math.max(1, env.length - lag);
   }
   for (let lag = minLag + 1; lag <= maxLag; lag++) {
     const bpm = 60 * FPS / lag;
-    const weight = Math.exp(-0.5 * (Math.log2(bpm / 115) / 0.9) ** 2);
+    const weight = Math.exp(-0.5 * (Math.log2(bpm / 115) / 2) ** 2);
     const v = ac[lag] * weight;
+    if (ac[lag] >= ac[lag - 1] && ac[lag] >= ac[lag + 1]) candidates.push({ bpm, value: v });
     if (v > bestVal && ac[lag] >= ac[lag - 1] && ac[lag] >= ac[lag + 1]) { bestVal = v; bestLag = lag; }
   }
-  // Уточнение с точностью до сотых BPM по всей записи (иначе к концу песни метроном «уплывёт»).
-  const rough = 60 * FPS / bestLag;
-  let best = { bpm: rough, score: -1, phase: 0 };
-  for (const [range, step] of [[3, 0.1], [0.12, 0.005]]) {
+  // Уточнение сетки: точность BPM важна на длинных ровных фонограммах.
+  candidates.sort((a, b) => b.value - a.value);
+  let best = { bpm: 60 * FPS / bestLag, score: -1, phase: 0 };
+  for (const candidate of candidates.filter(c => c.value > bestVal * 0.45).slice(0, 5)) {
+    const center = candidate.bpm;
+    const range = Math.max(3, center * center / (60 * FPS) * 0.7);
+    for (let bpm = Math.max(45, center - range); bpm <= Math.min(240, center + range); bpm += 0.1) {
+      const g = gridScore(env, 60 * FPS / bpm);
+      if (g.score > best.score) best = { bpm, ...g };
+    }
+    signal?.throwIfAborted();
+    await tick();
+  }
+  for (const [range, step] of [[0.12, 0.005]]) {
     const center = best.bpm;
     for (let bpm = center - range; bpm <= center + range; bpm += step) {
       const g = gridScore(env, 60 * FPS / bpm);
       if (g.score > best.score) best = { bpm, ...g };
     }
+    signal?.throwIfAborted();
     await tick();
   }
-  // Кадр → секунды: половина окна — поправка на положение кадра,
-  // +30 мс подобраны по тестовым записям с известными долями.
-  const toSec = f => (f + FFT / HOP / 2) / FPS + 0.03;
-  const period = 60 / best.bpm;
-  const offset = toSec(best.phase);
-  let bpm = best.bpm;
-  let frames = trackBeats(env, 60 * FPS / bpm);
-
-  // Проверка «не восьмые ли это»: если каждая вторая найденная доля заметно слабее
-  // (или темп неправдоподобно быстрый), настоящие доли — через одну.
-  const strength = f => { let m = 0; for (let i = Math.max(0, f - 2); i <= Math.min(env.length - 1, f + 2); i++) m = Math.max(m, env[i]); return m; };
-  const parityMean = p => { let s = 0, n = 0; frames.forEach((f, i) => { if (i % 2 === p) { s += strength(f); n++; } }); return n ? s / n : 0; };
-  const even = parityMean(0), odd = parityMean(1);
-  if (frames.length > 8 && bpm / 2 >= 50 && (Math.min(even, odd) < 0.6 * Math.max(even, odd) || bpm > 175)) {
-    const keep = even >= odd ? 0 : 1;
-    frames = frames.filter((_, i) => i % 2 === keep);
-    bpm /= 2;
+  // Никакой произвольной поправки +30 мс: время относится к центру FFT-окна.
+  const toSec = f => (f + FFT / HOP / 2) / FPS;
+  const bpm = best.bpm;
+  let frames = trackBeats(env, 60 * FPS / bpm, best.phase);
+  const period = 60 * FPS / bpm;
+  const residuals = frames.map(f => {
+    const nearest = best.phase + Math.round((f - best.phase) / period) * period;
+    return Math.abs(f - nearest);
+  }).sort((a, b) => a - b);
+  // Если запись ровная, используем уточнённую сетку. Отдельные слоги
+  // и акценты не должны заставлять щелчки гулять вокруг точного темпа.
+  if (frames.length > 8 && residuals[Math.floor(residuals.length * 0.9)] < FPS * 0.035) {
+    const first = frames[0], last = frames[frames.length - 1];
+    frames = [];
+    for (let k = Math.ceil((first - best.phase - FPS * 0.035) / period); ; k++) {
+      const f = best.phase + k * period;
+      if (f > last + FPS * 0.035) break;
+      if (f >= 0) frames.push(f);
+    }
   }
   const beats = frames.map(toSec);
+  if (beats.length < 4) throw new Error('Не получилось найти доли');
+  // Оценка того, насколько найденные доли поддержаны звуковыми атаками.
+  // Она не гарантирует верный музыкальный выбор между четвертями и восьмыми.
+  const mean = env.reduce((s, v) => s + v, 0) / env.length;
+  const supported = frames.filter(f => at(env, f) > mean).length / frames.length;
   const p = 60 / bpm;
   return {
     bpm: Math.round(bpm * 100) / 100,
-    offset: Math.round(((beats[0] ?? offset) % p) * 1000) / 1000,
+    offset: Math.round((beats[0] % p) * 1000) / 1000,
     beats,
+    uncertain: supported < 0.65,
   };
 }
 
 // Поиск каждой доли отдельно (динамическое программирование, метод Эллиса):
 // доли должны стоять на сильных атаках, а расстояние между соседними — быть близким к периоду.
 // Так метроном следует за живой музыкой, даже если темп немного «дышит».
-function trackBeats(env, period) {
+function trackBeats(env, period, phase) {
   const n = env.length;
   if (n < period * 4) return [];
   let mean = 0, sq = 0;
@@ -174,16 +216,35 @@ function trackBeats(env, period) {
   const std = Math.sqrt(sq / n - mean * mean) || 1;
   const o = Float32Array.from(env, v => v / std);
   const TIGHT = 100;
+  // Локальный период позволяет следовать постепенному изменению темпа.
+  // Ищем его рядом с основным, чтобы не прыгать между четвертями и восьмыми.
+  const stride = Math.round(FPS * 4), radius = Math.round(FPS * 6);
+  const periods = [];
+  for (let c = 0; c < n; c += stride) {
+    let best = -Infinity, chosen = period;
+    for (let lag = Math.floor(period * 0.8); lag <= Math.ceil(period * 1.25); lag++) {
+      let sum = 0, count = 0;
+      for (let i = Math.max(0, c - radius); i < Math.min(n - lag, c + radius); i++) { sum += o[i] * o[i + lag]; count++; }
+      const value = sum / Math.max(1, count) * Math.exp(-2 * Math.log(lag / period) ** 2);
+      if (value > best) { best = value; chosen = lag; }
+    }
+    periods.push(chosen);
+  }
   const score = new Float32Array(n), from = new Int32Array(n).fill(-1);
   const lo = Math.round(period / 2), hi = Math.round(period * 2);
   for (let t = 0; t < n; t++) {
+    const index = Math.floor(t / stride), fraction = t / stride - index;
+    const localPeriod = periods[index] * (1 - fraction) + (periods[index + 1] ?? periods[index]) * fraction;
     let best = 0, arg = -1;
     for (let p = t - hi; p <= t - lo; p++) {
       if (p < 0) continue;
-      const c = score[p] - TIGHT * Math.log((t - p) / period) ** 2;
-      if (arg < 0 || c > best) { best = c; arg = p; }
+      const c = score[p] - TIGHT * Math.log((t - p) / localPeriod) ** 2;
+      if (c > best) { best = c; arg = p; }
     }
-    score[t] = o[t] + (arg >= 0 ? best : 0);
+    // Начальная доля учитывает фазу, уже найденную при уточнении сетки.
+    const distance = Math.abs(((t - phase + period * 100) % period) - period / 2);
+    const initial = Math.exp(-0.5 * ((period / 2 - distance) / (period / 8)) ** 2);
+    score[t] = o[t] + (arg >= 0 ? best : initial);
     from[t] = arg;
   }
   // Последняя доля — лучшая точка среди последних двух периодов.
@@ -191,5 +252,9 @@ function trackBeats(env, period) {
   for (let i = Math.max(0, n - Math.round(period * 2)); i < n; i++) if (score[i] > score[t]) t = i;
   const beats = [];
   for (; t >= 0; t = from[t]) beats.push(t);
-  return beats.reverse();
+  beats.reverse();
+  // Не кликаем в пустом вступлении и после затухания.
+  const active = beats.filter(f => o[f] > mean / std * 0.5);
+  if (!active.length) return [];
+  return beats.filter(f => f >= active[0] && f <= active[active.length - 1]);
 }

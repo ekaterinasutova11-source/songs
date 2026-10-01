@@ -2,8 +2,8 @@ import { call, setKey, fileUrl, fileText, uploadFile } from './api.js';
 import { groupSongs, variantName, songKey, buildFileName, retitleFileName, parseFileName, AUDIO_EXT } from './parse.js';
 import { NEW_DAYS, NEW_SINCE } from './config.js';
 import { renderLyrics, editorToMarkup, COLORS } from './lyrics.js';
-import { Metronome, fitTaps } from './metronome.js';
-import { detectTempo } from './tempo.js';
+import { Metronome, fitTaps } from './metronome.js?v=metro2';
+import { detectTempo, TEMPO_VERSION } from './tempo.js?v=metro2';
 
 const main = document.getElementById('main');
 let role = null;         // 'teacher' | 'student'
@@ -731,6 +731,10 @@ const player = (() => {
       return audio.paused ? audio.play() : audio.pause();
     }
     const my = ++token;
+    cancelTempo();
+    cancelTaps();
+    audio.pause();
+    metro.setGrid(0, 0);
     current = { id, song, v, student, url: null };
     bar.hidden = false;
     document.body.classList.add('has-player');
@@ -744,10 +748,10 @@ const player = (() => {
       const url = await fileUrl(student.id, v.file.name);
       if (my !== token) return;
       current.url = url;
-      if (metro.on) loadTempo();
       const wasRate = audio.playbackRate;
       audio.src = url;
       audio.playbackRate = wasRate;
+      if (metro.on) loadTempo();
       dl.href = url;
       if ('mediaSession' in navigator) {
         navigator.mediaSession.metadata = new MediaMetadata({ title: song.title, artist: variantName(v) });
@@ -765,60 +769,78 @@ const player = (() => {
   const metroBtn = $('.p-metro-btn'), metroBox = $('.p-metro');
   const mBpm = metroBox.querySelector('.m-bpm'), mStatus = metroBox.querySelector('.m-status'), mDot = metroBox.querySelector('.m-dot');
   const tapBtn = metroBox.querySelector('[data-act="tapTempo"]');
-  let tempoToken = 0, saveTimer = null;
+  const bpmInput = metroBox.querySelector('.m-bpm-input');
+  const saveBeatBtn = metroBox.querySelector('[data-act="save"]');
+  let tempoToken = 0, analysisController = null;
+  function cancelTempo() { tempoToken++; analysisController?.abort(); analysisController = null; }
+  const cacheKey = cur => `songs:tempo:${TEMPO_VERSION}:${cur.id}:${cur.v.file.modified}:${cur.v.file.size}`;
 
   // Доли храним компактно: миллисекунды, каждая следующая — разницей с предыдущей.
   const encodeBeats = beats => beats.map((t, i) => Math.round(t * 1000) - (i ? Math.round(beats[i - 1] * 1000) : 0)).join(',');
   const decodeBeats = str => { let acc = 0; return str.split(',').map(x => (acc += Number(x)) / 1000); };
 
   const showBpm = (note = '') => {
-    if (!metro.bpm) return;
+    saveBeatBtn.hidden = role !== 'teacher';
+    if (!metro.bpm) { mBpm.textContent = '♩ = …'; bpmInput.value = ''; mStatus.textContent = note; return; }
     const rate = audio.playbackRate || 1;
     mBpm.textContent = `♩ = ${Math.round(metro.bpm)}`;
+    if (document.activeElement !== bpmInput) bpmInput.value = String(Math.round(metro.bpm * 100) / 100);
     mStatus.textContent = note || (rate !== 1 ? `сейчас ${Math.round(metro.bpm * rate)} при ${rate}×` : '');
   };
 
-  // Темп каждого файла определяется один раз и запоминается в данных песни.
+  // Старые автоматические доли пересчитываем. Ручные настройки сохраняем.
+  // Автоанализ хранится с версией в браузере; преподаватель может подтвердить его.
   async function loadTempo(force = false) {
     const cur = current;
     if (!cur?.url) return;
-    const my = ++tempoToken;
+    cancelTempo();
+    cancelTaps();
+    const my = tempoToken;
     const saved = cur.song.meta?.tempo?.[cur.v.file.name];
-    if (saved && !force && (saved.manual || saved.beats)) {
-      if (saved.beats) metro.setBeats(decodeBeats(saved.beats), saved.bpm);
-      else metro.setGrid(saved.bpm, saved.offset);
-      return showBpm(saved.manual ? 'настучано вручную' : '');
+    let cached;
+    try { cached = JSON.parse(localGet(cacheKey(cur))); } catch {}
+    const selected = !force && (cached?.remote === JSON.stringify(saved ?? null) ? cached : saved?.manual ? saved : null);
+    if (selected && Number.isFinite(selected.bpm) && selected.bpm > 20 && selected.bpm < 400) {
+      const beats = selected.beats ? decodeBeats(selected.beats) : null;
+      if (beats?.length && beats.every((b, i) => Number.isFinite(b) && (!i || b > beats[i - 1]))) metro.setBeats(beats, selected.bpm);
+      else metro.setGrid(selected.bpm, selected.offset || 0);
+      return showBpm(selected.manual ? 'настроено вручную' : selected.uncertain ? 'Проверьте доли — результат неточный' : 'авто · проверьте совпадение');
     }
     metro.setGrid(0, 0);
-    mBpm.textContent = '♩ = …';
+    showBpm();
+    analysisController = new AbortController();
     try {
-      const t = await detectTempo(cur.url, { onProgress: text => { if (my === tempoToken) mStatus.textContent = text; } });
-      if (my !== tempoToken) return;
+      const t = await detectTempo(cur.url, { signal: analysisController.signal, onProgress: text => { if (my === tempoToken) mStatus.textContent = text; } });
+      if (my !== tempoToken || current !== cur) return;
       metro.setBeats(t.beats, t.bpm);
-      showBpm();
-      rememberTempo(cur);
+      showBpm(t.uncertain ? 'Проверьте доли — результат неточный' : 'авто · проверьте совпадение');
+      rememberTempo(cur, false, t.uncertain);
     } catch (e) {
       if (my === tempoToken) { mBpm.textContent = '♩ = ?'; mStatus.textContent = 'Не получилось определить темп — попробуйте «Настучать»'; }
     }
   }
 
-  function rememberTempo(cur = current, delay = 0, manual = false) {
-    const t = { bpm: metro.bpm, offset: metro.offset };
+  function rememberTempo(cur = current, manual = true, uncertain = false) {
+    if (!cur || !metro.bpm) return;
+    const t = { bpm: Math.round(metro.bpm * 1000) / 1000, offset: Math.round(metro.offset * 1000) / 1000 };
     if (metro.beats) t.beats = encodeBeats(metro.beats);
     if (manual) t.manual = true;
-    cur.song.meta ||= {};
-    cur.song.meta.tempo = { ...cur.song.meta.tempo, [cur.v.file.name]: t };
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
-      saveMeta(cur.student.id, cur.song.key, { patch: { tempo: { [cur.v.file.name]: t } } })
-        .catch(e => toast('Темп не сохранился: ' + e.message, 'error'));
-    }, delay);
+    let saved = Promise.resolve(true);
+    if (manual && role === 'teacher') {
+      cur.song.meta ||= {};
+      cur.song.meta.tempo = { ...cur.song.meta.tempo, [cur.v.file.name]: t };
+      saved = saveMeta(cur.student.id, cur.song.key, { patch: { tempo: { [cur.v.file.name]: t } } })
+        .then(() => true).catch(e => { toast('Темп не сохранился: ' + e.message, 'error'); return false; });
+    }
+    localSet(cacheKey(cur), JSON.stringify({ ...t, uncertain, remote: JSON.stringify(cur.song.meta?.tempo?.[cur.v.file.name] ?? null) }));
+    return saved;
   }
 
   metroBtn.addEventListener('click', () => {
     if (metro.on) {
       metro.stop();
-      tempoToken++;
+      cancelTempo();
+      cancelTaps();
     } else {
       metro.start();
       loadTempo();
@@ -830,6 +852,10 @@ const player = (() => {
 
   // «Настучать»: нажимайте в такт музыке; после 8 нажатий (или паузы) темп готов.
   let taps = [], tapTimer = null;
+  function cancelTaps() {
+    clearTimeout(tapTimer); taps = [];
+    tapBtn.textContent = 'Настучать'; tapBtn.classList.remove('active');
+  }
   function finishTaps() {
     clearTimeout(tapTimer);
     const fit = fitTaps(taps);
@@ -839,7 +865,7 @@ const player = (() => {
     if (!fit) return showBpm('Не получилось — стучите ровно, хотя бы 4 раза');
     metro.setGrid(fit.bpm, fit.offset);
     showBpm('настучано вручную');
-    rememberTempo(current, 0, true);
+    rememberTempo();
   }
 
   metroBox.addEventListener('click', e => {
@@ -847,6 +873,7 @@ const player = (() => {
     if (!act || !current) return;
     if (act === 'tapTempo') {
       if (audio.paused) return toast('Включите песню и стучите по кнопке в такт');
+      if (!taps.length) { cancelTempo(); metro.setGrid(0, 0); }
       taps.push(metro.heardTime());
       tapBtn.classList.add('active');
       tapBtn.textContent = `Ещё… ${taps.length}/8`;
@@ -857,15 +884,33 @@ const player = (() => {
     }
     if (act === 'auto') return loadTempo(true);
     if (!metro.bpm) return;
+    cancelTempo();
     if (act === 'half') metro.half();
     if (act === 'double') metro.double();
+    if (act === 'earlier') metro.shift(-0.01);
+    if (act === 'later') metro.shift(0.01);
     if (act === 'align') {
       if (audio.paused) return toast('Включите песню и нажмите точно в момент доли');
       metro.alignTo(metro.heardTime());
     }
     showBpm();
-    rememberTempo(current, 1500, !!current.song.meta?.tempo?.[current.v.file.name]?.manual);
+    const target = current;
+    rememberTempo().then(ok => {
+      if (act === 'save' && current === target) showBpm(ok ? 'доли сохранены' : 'сохранено только в этом браузере');
+    });
   });
+  bpmInput.addEventListener('change', () => {
+    const bpm = Number(bpmInput.value.replace(',', '.'));
+    if (!(bpm > 20 && bpm < 400)) { toast('Введите темп от 21 до 399 BPM'); return showBpm(); }
+    cancelTempo(); cancelTaps();
+    // При смене BPM сохраняем ближайшую текущую долю как опорную точку.
+    const t = audio.currentTime;
+    const anchor = metro.beats ? metro.beats[metro.nearestIndex(t)]
+      : metro.bpm ? metro.offset + Math.round((t - metro.offset) * metro.bpm / 60) * 60 / metro.bpm : t;
+    metro.setGrid(bpm, anchor);
+    showBpm('настроено вручную'); rememberTempo();
+  });
+  for (const ev of ['pause', 'seeking', 'ratechange']) audio.addEventListener(ev, cancelTaps);
   metroBox.querySelector('.m-vol').addEventListener('input', e => metro.setVolume(Number(e.target.value)));
   metro.onBeat = () => { mDot.classList.remove('beat'); void mDot.offsetWidth; mDot.classList.add('beat'); };
   audio.addEventListener('ratechange', () => showBpm());
@@ -881,6 +926,7 @@ const player = (() => {
   $('.p-close').addEventListener('click', () => {
     audio.pause();
     token++;
+    cancelTempo(); cancelTaps();
     current = null;
     if (metro.on) metroBtn.click();
     bar.hidden = true;

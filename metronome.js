@@ -20,11 +20,22 @@ export class Metronome {
     this.timer = null;
     this.lastScheduled = -Infinity;
     this.onBeat = null;
-    for (const ev of ['seeking', 'seeked', 'play', 'ratechange']) audio.addEventListener(ev, () => this.reset());
+    this.pending = new Set();
+    this.visualTimers = new Set();
+    this.source = null;
+    this.previousAudioTime = null;
+    for (const ev of ['seeking', 'seeked', 'play', 'pause', 'waiting', 'playing', 'ended', 'emptied', 'ratechange']) audio.addEventListener(ev, () => this.reset());
     audio.addEventListener('play', () => this.ctx?.resume());
   }
 
-  reset() { this.lastScheduled = -Infinity; }
+  reset() {
+    for (const osc of this.pending) { try { osc.stop(); } catch {} osc.disconnect(); }
+    this.pending.clear();
+    for (const timer of this.visualTimers) clearTimeout(timer);
+    this.visualTimers.clear();
+    this.lastScheduled = -Infinity;
+    this.previousAudioTime = null;
+  }
 
   setGrid(bpm, offset) {
     this.bpm = bpm;
@@ -71,6 +82,12 @@ export class Metronome {
     this.reset();
   }
 
+  shift(delta) {
+    if (this.beats) this.beats = this.beats.map(b => b + delta);
+    this.offset += delta;
+    this.reset();
+  }
+
   nearestIndex(t) {
     const b = this.beats;
     let lo = 0, hi = b.length - 1;
@@ -80,7 +97,10 @@ export class Metronome {
 
   // Момент, который слушатель слышит прямо сейчас (с учётом задержки вывода).
   heardTime() {
-    const lag = (this.ctx?.outputLatency || 0) + (this.ctx?.baseLatency || 0);
+    const stamp = this.ctx?.getOutputTimestamp?.();
+    const lag = stamp?.contextTime > 0
+      ? Math.max(0, this.ctx.currentTime - stamp.contextTime - (performance.now() - stamp.performanceTime) / 1000)
+      : (this.ctx?.outputLatency || 0) + (this.ctx?.baseLatency || 0);
     return this.audio.currentTime - lag * (this.audio.playbackRate || 1);
   }
 
@@ -99,7 +119,8 @@ export class Metronome {
       this.gain.connect(this.ctx.destination);
       // Пускаем музыку через тот же AudioContext (нужен crossOrigin у <audio>).
       try {
-        this.ctx.createMediaElementSource(this.audio).connect(this.ctx.destination);
+        this.source = this.ctx.createMediaElementSource(this.audio);
+        this.source.connect(this.ctx.destination);
       } catch { /* уже подключено или браузер не умеет — щелчки всё равно будут */ }
     }
     this.ctx.resume();
@@ -112,6 +133,7 @@ export class Metronome {
   stop() {
     this.on = false;
     clearInterval(this.timer);
+    this.reset();
   }
 
   click(when) {
@@ -122,6 +144,8 @@ export class Metronome {
     env.gain.linearRampToValueAtTime(1, when + 0.001);
     env.gain.exponentialRampToValueAtTime(0.001, when + 0.05);
     osc.connect(env).connect(this.gain);
+    this.pending.add(osc);
+    osc.onended = () => { this.pending.delete(osc); osc.disconnect(); env.disconnect(); };
     osc.start(when);
     osc.stop(when + 0.06);
   }
@@ -134,12 +158,7 @@ export class Metronome {
       let i = this.nearestIndex(a);
       if (list[i] < a) i++;
       for (; i < list.length && list[i] <= b; i++) out.push(list[i]);
-      // После последней найденной доли продолжаем ровной сеткой.
-      const last = list[list.length - 1];
-      if (b > last && this.bpm) {
-        const period = 60 / this.bpm;
-        for (let t = last + period * Math.max(1, Math.ceil((a - last) / period)); t <= b; t += period) out.push(t);
-      }
+      // Не придумываем доли после конца разметки (затухание, тишина).
     } else if (this.bpm) {
       const period = 60 / this.bpm;
       for (let k = Math.ceil((a - this.offset) / period); ; k++) {
@@ -153,15 +172,21 @@ export class Metronome {
 
   schedule() {
     const a = this.audio;
-    if (!this.on || !this.bpm || a.paused || a.seeking || !this.ctx) return;
+    if (!this.on || !this.bpm || a.paused || a.seeking || a.readyState < 3 || !this.ctx || this.ctx.state !== 'running') return;
     const rate = a.playbackRate || 1;
     const now = a.currentTime;
+    // Зацикливание записи не во всех браузерах вызывает seeking.
+    if (this.previousAudioTime !== null && now < this.previousAudioTime - 0.05) this.reset();
+    this.previousAudioTime = now;
     for (const t of this.beatsBetween(Math.max(now - 0.01, this.lastScheduled + 1e-3), now + 0.12 * rate)) {
       if (t > a.duration) break;
       const when = Math.max(this.ctx.currentTime, this.ctx.currentTime + (t - now) / rate);
       this.click(when);
       this.lastScheduled = t;
-      if (this.onBeat) setTimeout(this.onBeat, Math.max(0, (when - this.ctx.currentTime) * 1000));
+      if (this.onBeat) {
+        const timer = setTimeout(() => { this.visualTimers.delete(timer); this.onBeat?.(); }, Math.max(0, (when - this.ctx.currentTime) * 1000));
+        this.visualTimers.add(timer);
+      }
     }
   }
 }
