@@ -67,3 +67,28 @@ for (const pattern of Object.keys(DRUM_PATTERNS).filter(id => id !== 'click')) {
     } finally { metro.stop(); }
   });
 }
+
+test('synthesizes every pattern instrument with valid envelopes and cancels it on stop', () => {
+  const { metro, ctx } = setup();
+  const sources = [];
+  const param = () => ({ value: 0,
+    setValueAtTime(value, time) { assert.ok(Number.isFinite(value) && Number.isFinite(time)); },
+    linearRampToValueAtTime(value, time) { assert.ok(Number.isFinite(value) && Number.isFinite(time)); },
+    exponentialRampToValueAtTime(value, time) { assert.ok(value > 0 && Number.isFinite(value) && Number.isFinite(time)); } });
+  const source = () => { const node = { frequency: param(), connect() { return this; }, disconnect() {},
+    start(time) { assert.ok(time >= ctx.currentTime); }, stop(time) { if (time !== undefined) assert.ok(time > ctx.currentTime); else this.onended?.(); } };
+    sources.push(node); return node; };
+  ctx.sampleRate = 48000;
+  ctx.createOscillator = source;
+  ctx.createBufferSource = source;
+  ctx.createGain = () => ({ gain: param(), connect() { return this; }, disconnect() {} });
+  ctx.createBiquadFilter = () => ({ frequency: param(), Q: param(), connect() { return this; }, disconnect() {} });
+  ctx.createBuffer = (_, length) => ({ duration: length / ctx.sampleRate, getChannelData() { return new Float32Array(length); } });
+  metro.ctx = ctx; metro.gain = ctx.createGain();
+  const instruments = new Set(Object.values(DRUM_PATTERNS).flatMap(pattern => Object.keys(pattern).filter(key => Array.isArray(pattern[key]))));
+  for (const voice of instruments) metro.drum(voice, 10.04);
+  assert.equal(sources.length, instruments.size);
+  assert.equal(metro.pending.size, instruments.size);
+  assert.ok(metro.noise.duration >= 0.32);
+  metro.stop(); assert.equal(metro.pending.size, 0);
+});

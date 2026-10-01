@@ -200,12 +200,30 @@ export const DRUM_PATTERNS = {
   rock: { name: 'Рок · 4/4', steps: 16, kick: [0, 6, 8, 10], snare: [4, 12], hat: [0, 2, 4, 6, 8, 10, 12, 14] },
   hiphop: { name: 'Хип-хоп · 4/4', steps: 16, kick: [0, 7, 10], snare: [4, 12], hat: [0, 2, 4, 6, 8, 10, 12, 14, 15] },
   waltz: { name: 'Вальс · 3/4', steps: 12, kick: [0], rim: [4, 8], shaker: [0, 2, 4, 6, 8, 10] },
-  funk: { name: 'Фанк · синкопы', steps: 16, kick: [0, 3, 6, 10, 14], snare: [4, 12], hat: [0, 2, 4, 6, 8, 10, 11, 14, 15] },
-  latin: { name: 'Латина · 3–3–2', steps: 16, kick: [0, 6, 12], rim: [3, 8, 11, 14], shaker: [0, 2, 4, 6, 8, 10, 12, 14] },
-  breakbeat: { name: 'Брейкбит · синкопы', steps: 32, kick: [0, 6, 10, 16, 19, 26, 30], snare: [4, 12, 20, 27, 28, 31], hat: repeatHits([0, 2, 4, 6, 8, 10, 14, 15], 2) },
-  shuffle: { name: 'Шаффл · триоли', steps: 12, subdivisions: 3, kick: [0, 6, 8], snare: [3, 9], hat: [0, 2, 3, 5, 6, 8, 9, 11] },
-  popfill: { name: 'Поп · со сбивкой', steps: 64, kick: [...repeatHits([0, 8], 3), 48, 56], snare: [...repeatHits([4, 12], 3), 52, 58, 60, 61, 62, 63], hat: [...repeatHits([0, 2, 4, 6, 8, 10, 12, 14], 3), 48, 50, 52, 54, 56] },
-  rockfill: { name: 'Рок · со сбивкой', steps: 64, kick: [...repeatHits([0, 6, 8, 10], 3), 48, 54, 56, 62], snare: [...repeatHits([4, 12], 3), 52, 57, 58, 60, 61, 63], hat: [...repeatHits([0, 2, 4, 6, 8, 10, 12, 14], 3), 48, 50, 52, 54], rim: [59, 62] },
+  funk: { name: 'Фанк · шуршащий', steps: 32, kick: [0, 3, 10, 16, 22, 26, 30], snare: [4, 12, 20, 28], ghost: [7, 15, 19, 25, 31], hat: [...repeatHits([0, 1, 2, 4, 5, 7, 8, 9, 10, 12, 13, 15], 2)], openhat: [6, 14, 23, 30], levels: { hat: 0.65 } },
+  latin: { name: 'Латина · конги', steps: 32, congalow: [0, 6, 12, 16, 22, 28], congahigh: [3, 7, 10, 14, 19, 23, 26, 29, 31], cowbell: [0, 6, 10, 16, 20, 26], shaker: repeatHits([0, 2, 4, 6, 8, 10, 12, 14], 2) },
+  breakbeat: { name: 'Брейкбит · ломаный', steps: 32, kick: [0, 6, 10, 16, 19, 26, 30], snare: [4, 12, 20, 27, 28, 31], ghost: [9, 15, 23], hat: [0, 2, 7, 8, 11, 16, 18, 22, 25, 29], openhat: [14, 24], clap: [12, 28], levels: { snare: 1.2, clap: 0.6 } },
+  shuffle: { name: 'Шаффл · джазовый', steps: 24, subdivisions: 3, kick: [0, 12], rim: [3, 9, 15, 21], ride: [0, 3, 5, 6, 9, 11, 12, 15, 17, 18, 21, 23], ghost: [8, 20], levels: { kick: 0.65 } },
+  popfill: { name: 'Поп · хлопки и сбивка', steps: 64, kick: [...repeatHits([0, 4, 8, 12], 3), 48, 52, 56], clap: [...repeatHits([4, 12], 3), 52, 58, 60, 61, 63], shaker: [...repeatHits([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], 3), 48, 50, 52, 54, 56], openhat: [...repeatHits([2, 6, 10, 14], 3), 50, 54], congahigh: [59, 62], levels: { shaker: 0.6 } },
+  rockfill: { name: 'Рок · томы и сбивка', steps: 64, kick: [...repeatHits([0, 6, 8, 10], 3), 48, 54, 56], snare: [...repeatHits([4, 12], 3), 52, 57], ride: [...repeatHits([0, 2, 4, 6, 8, 10, 12, 14], 3), 48, 50, 52, 54], tomhigh: [58, 59], tomlow: [60, 62, 63], levels: { snare: 1.25, ride: 0.8 } },
+};
+
+// Частоты, огибающие и фильтры дают каждому инструменту собственный тембр.
+const DRUM_VOICES = {
+  kick: { duration: 0.22, level: 0.8, tone: [145, 45, 'sine'] },
+  rim: { duration: 0.04, level: 0.22, tone: [650, 300, 'triangle'] },
+  tomhigh: { duration: 0.18, level: 0.48, tone: [260, 130, 'sine'] },
+  tomlow: { duration: 0.28, level: 0.55, tone: [150, 70, 'sine'] },
+  congahigh: { duration: 0.095, level: 0.3, tone: [520, 260, 'triangle'] },
+  congalow: { duration: 0.16, level: 0.4, tone: [330, 160, 'sine'] },
+  cowbell: { duration: 0.065, level: 0.055, tone: [830, 800, 'square'] },
+  snare: { duration: 0.15, level: 0.3, filter: ['bandpass', 1800] },
+  ghost: { duration: 0.07, level: 0.065, filter: ['bandpass', 1800] },
+  clap: { duration: 0.16, level: 0.28, filter: ['bandpass', 1200] },
+  hat: { duration: 0.05, level: 0.12, filter: ['highpass', 7000] },
+  openhat: { duration: 0.23, level: 0.13, filter: ['highpass', 6500] },
+  ride: { duration: 0.32, level: 0.09, filter: ['bandpass', 8500] },
+  shaker: { duration: 0.05, level: 0.08, filter: ['bandpass', 4500] },
 };
 
 export class StandaloneMetronome extends Metronome {
@@ -220,32 +238,39 @@ export class StandaloneMetronome extends Metronome {
   // Собственные синтезированные звуки: ни записи, ни сторонние сэмплы не используются.
   drum(voice, when, velocity = 1) {
     const ctx = this.ctx, env = ctx.createGain();
-    const tonal = voice === 'kick' || voice === 'rim';
-    const duration = voice === 'kick' ? 0.22 : voice === 'snare' ? 0.15 : voice === 'rim' ? 0.04 : 0.05;
-    const level = { kick: 0.8, snare: 0.3, rim: 0.22, hat: 0.12, shaker: 0.08 }[voice] * velocity;
+    const sound = DRUM_VOICES[voice];
+    const duration = sound.duration;
+    const level = sound.level * velocity;
     let source, filter;
-    if (tonal) {
+    if (sound.tone) {
       source = ctx.createOscillator();
-      source.type = voice === 'kick' ? 'sine' : 'triangle';
-      source.frequency.setValueAtTime(voice === 'kick' ? 145 : 650, when);
-      source.frequency.exponentialRampToValueAtTime(voice === 'kick' ? 45 : 300, when + duration);
+      source.type = sound.tone[2];
+      source.frequency.setValueAtTime(sound.tone[0], when);
+      source.frequency.exponentialRampToValueAtTime(sound.tone[1], when + duration);
       source.connect(env);
     } else {
       if (!this.noise) {
-        this.noise = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * 0.25), ctx.sampleRate);
+        this.noise = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * 0.5), ctx.sampleRate);
         const data = this.noise.getChannelData(0);
         let seed = 137;
         for (let i = 0; i < data.length; i++) { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; data[i] = (seed >>> 0) / 2147483648 - 1; }
       }
       source = ctx.createBufferSource(); source.buffer = this.noise;
       filter = ctx.createBiquadFilter();
-      filter.type = voice === 'snare' || voice === 'shaker' ? 'bandpass' : 'highpass';
-      filter.frequency.value = voice === 'snare' ? 1800 : voice === 'shaker' ? 4500 : 7000;
+      filter.type = sound.filter[0];
+      filter.frequency.value = sound.filter[1];
       filter.Q.value = 0.7;
       source.connect(filter).connect(env);
     }
     env.gain.setValueAtTime(0, when);
     env.gain.linearRampToValueAtTime(level, when + 0.002);
+    if (voice === 'clap') {
+      // Три коротких импульса создают хлопок с широким хвостом.
+      for (const offset of [0.012, 0.024]) {
+        env.gain.linearRampToValueAtTime(level * 0.08, when + offset - 0.002);
+        env.gain.linearRampToValueAtTime(level, when + offset);
+      }
+    }
     env.gain.exponentialRampToValueAtTime(0.001, when + duration);
     env.connect(this.gain);
     this.pending.add(source);
@@ -278,8 +303,8 @@ export class StandaloneMetronome extends Metronome {
       if (this.pattern === 'click') this.click(t);
       else {
         const position = k % pattern.steps;
-        for (const voice of ['kick', 'snare', 'rim', 'hat', 'shaker']) {
-          if (pattern[voice]?.includes(position)) this.drum(voice, t, position % subdivisions ? 0.65 : 1);
+        for (const voice of Object.keys(DRUM_VOICES)) {
+          if (pattern[voice]?.includes(position)) this.drum(voice, t, (position % subdivisions ? 0.65 : 1) * (pattern.levels?.[voice] ?? 1));
         }
       }
       this.lastScheduled = t;
