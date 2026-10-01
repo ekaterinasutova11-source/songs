@@ -54,7 +54,7 @@ for (const pattern of Object.keys(DRUM_PATTERNS).filter(id => id !== 'click')) {
     const hits = [];
     metro.drum = (voice, time) => hits.push({voice, time});
     metro.setPattern(pattern);
-    const bar = DRUM_PATTERNS[pattern].steps * 0.125;
+    const bar = DRUM_PATTERNS[pattern].steps * 0.5 / (DRUM_PATTERNS[pattern].subdivisions || 4);
     try {
       metro.start();
       for (let t = 10; t < 10 + bar * 3 - 0.12; t += 0.025) { ctx.currentTime = t; metro.schedule(); }

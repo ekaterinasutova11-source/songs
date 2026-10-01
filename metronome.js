@@ -192,6 +192,7 @@ export class Metronome {
 }
 
 // Самостоятельный метроном: его часы — AudioContext, аудиозапись не нужна.
+const repeatHits = (hits, bars) => Array.from({ length: bars }, (_, bar) => hits.map(hit => hit + bar * 16)).flat();
 export const DRUM_PATTERNS = {
   click: { name: 'Щелчки', steps: 4 },
   pop: { name: 'Поп · 4/4', steps: 16, kick: [0, 8], snare: [4, 12], hat: [0, 2, 4, 6, 8, 10, 12, 14] },
@@ -199,6 +200,12 @@ export const DRUM_PATTERNS = {
   rock: { name: 'Рок · 4/4', steps: 16, kick: [0, 6, 8, 10], snare: [4, 12], hat: [0, 2, 4, 6, 8, 10, 12, 14] },
   hiphop: { name: 'Хип-хоп · 4/4', steps: 16, kick: [0, 7, 10], snare: [4, 12], hat: [0, 2, 4, 6, 8, 10, 12, 14, 15] },
   waltz: { name: 'Вальс · 3/4', steps: 12, kick: [0], rim: [4, 8], shaker: [0, 2, 4, 6, 8, 10] },
+  funk: { name: 'Фанк · синкопы', steps: 16, kick: [0, 3, 6, 10, 14], snare: [4, 12], hat: [0, 2, 4, 6, 8, 10, 11, 14, 15] },
+  latin: { name: 'Латина · 3–3–2', steps: 16, kick: [0, 6, 12], rim: [3, 8, 11, 14], shaker: [0, 2, 4, 6, 8, 10, 12, 14] },
+  breakbeat: { name: 'Брейкбит · синкопы', steps: 32, kick: [0, 6, 10, 16, 19, 26, 30], snare: [4, 12, 20, 27, 28, 31], hat: repeatHits([0, 2, 4, 6, 8, 10, 14, 15], 2) },
+  shuffle: { name: 'Шаффл · триоли', steps: 12, subdivisions: 3, kick: [0, 6, 8], snare: [3, 9], hat: [0, 2, 3, 5, 6, 8, 9, 11] },
+  popfill: { name: 'Поп · со сбивкой', steps: 64, kick: [...repeatHits([0, 8], 3), 48, 56], snare: [...repeatHits([4, 12], 3), 52, 58, 60, 61, 62, 63], hat: [...repeatHits([0, 2, 4, 6, 8, 10, 12, 14], 3), 48, 50, 52, 54, 56] },
+  rockfill: { name: 'Рок · со сбивкой', steps: 64, kick: [...repeatHits([0, 6, 8, 10], 3), 48, 54, 56, 62], snare: [...repeatHits([4, 12], 3), 52, 57, 58, 60, 61, 63], hat: [...repeatHits([0, 2, 4, 6, 8, 10, 12, 14], 3), 48, 50, 52, 54], rim: [59, 62] },
 };
 
 export class StandaloneMetronome extends Metronome {
@@ -262,7 +269,7 @@ export class StandaloneMetronome extends Metronome {
     const now = this.ctx.currentTime;
     // После долгой задержки вкладки пропускаем старые удары без пачки щелчков.
     const pattern = DRUM_PATTERNS[this.pattern];
-    const subdivisions = this.pattern === 'click' ? 1 : 4;
+    const subdivisions = this.pattern === 'click' ? 1 : (pattern.subdivisions || 4);
     const step = 60 / this.bpm / subdivisions;
     const first = Math.max(0, Math.ceil((Math.max(now, this.lastScheduled + 1e-5) - this.offset) / step));
     for (let k = first; ; k++) {
@@ -272,7 +279,7 @@ export class StandaloneMetronome extends Metronome {
       else {
         const position = k % pattern.steps;
         for (const voice of ['kick', 'snare', 'rim', 'hat', 'shaker']) {
-          if (pattern[voice]?.includes(position)) this.drum(voice, t, position % 4 ? 0.65 : 1);
+          if (pattern[voice]?.includes(position)) this.drum(voice, t, position % subdivisions ? 0.65 : 1);
         }
       }
       this.lastScheduled = t;
