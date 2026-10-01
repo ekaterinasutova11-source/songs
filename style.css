@@ -460,6 +460,7 @@ body.has-player:has(.player.with-metro) .editor-footer { bottom: 170px; }
 .standalone-title strong { font-size: 15px; }
 .standalone-bpm { width: 72px; height: 32px; padding: 0 6px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-2); font-variant-numeric: tabular-nums; }
 .standalone-controls .btn { min-width: 100px; }
+.standalone-pattern { max-width: 165px; height: 32px; padding: 0 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); font-size: 14px; }
 @media (max-width: 430px) {
   .standalone-inner { gap: 6px; padding: 8px 12px; }
   .standalone-controls { gap: 5px; }

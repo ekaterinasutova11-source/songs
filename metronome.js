@@ -192,8 +192,59 @@ export class Metronome {
 }
 
 // Самостоятельный метроном: его часы — AudioContext, аудиозапись не нужна.
+export const DRUM_PATTERNS = {
+  click: { name: 'Щелчки', steps: 4 },
+  pop: { name: 'Поп · 4/4', steps: 16, kick: [0, 8], snare: [4, 12], hat: [0, 2, 4, 6, 8, 10, 12, 14] },
+  soft: { name: 'Мягкий · 4/4', steps: 16, kick: [0, 8], rim: [4, 12], shaker: [0, 2, 4, 6, 8, 10, 12, 14] },
+  rock: { name: 'Рок · 4/4', steps: 16, kick: [0, 6, 8, 10], snare: [4, 12], hat: [0, 2, 4, 6, 8, 10, 12, 14] },
+  hiphop: { name: 'Хип-хоп · 4/4', steps: 16, kick: [0, 7, 10], snare: [4, 12], hat: [0, 2, 4, 6, 8, 10, 12, 14, 15] },
+  waltz: { name: 'Вальс · 3/4', steps: 12, kick: [0], rim: [4, 8], shaker: [0, 2, 4, 6, 8, 10] },
+};
+
 export class StandaloneMetronome extends Metronome {
-  constructor() { super(null); this.setTempo(120); }
+  constructor() { super(null); this.pattern = 'click'; this.noise = null; this.setTempo(120); }
+
+  setPattern(pattern) {
+    if (!Object.hasOwn(DRUM_PATTERNS, pattern)) throw new RangeError('Неизвестный ритм');
+    this.pattern = pattern;
+    this.setTempo(this.bpm);
+  }
+
+  // Собственные синтезированные звуки: ни записи, ни сторонние сэмплы не используются.
+  drum(voice, when, velocity = 1) {
+    const ctx = this.ctx, env = ctx.createGain();
+    const tonal = voice === 'kick' || voice === 'rim';
+    const duration = voice === 'kick' ? 0.22 : voice === 'snare' ? 0.15 : voice === 'rim' ? 0.04 : 0.05;
+    const level = { kick: 0.8, snare: 0.3, rim: 0.22, hat: 0.12, shaker: 0.08 }[voice] * velocity;
+    let source, filter;
+    if (tonal) {
+      source = ctx.createOscillator();
+      source.type = voice === 'kick' ? 'sine' : 'triangle';
+      source.frequency.setValueAtTime(voice === 'kick' ? 145 : 650, when);
+      source.frequency.exponentialRampToValueAtTime(voice === 'kick' ? 45 : 300, when + duration);
+      source.connect(env);
+    } else {
+      if (!this.noise) {
+        this.noise = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * 0.25), ctx.sampleRate);
+        const data = this.noise.getChannelData(0);
+        let seed = 137;
+        for (let i = 0; i < data.length; i++) { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; data[i] = (seed >>> 0) / 2147483648 - 1; }
+      }
+      source = ctx.createBufferSource(); source.buffer = this.noise;
+      filter = ctx.createBiquadFilter();
+      filter.type = voice === 'snare' || voice === 'shaker' ? 'bandpass' : 'highpass';
+      filter.frequency.value = voice === 'snare' ? 1800 : voice === 'shaker' ? 4500 : 7000;
+      filter.Q.value = 0.7;
+      source.connect(filter).connect(env);
+    }
+    env.gain.setValueAtTime(0, when);
+    env.gain.linearRampToValueAtTime(level, when + 0.002);
+    env.gain.exponentialRampToValueAtTime(0.001, when + duration);
+    env.connect(this.gain);
+    this.pending.add(source);
+    source.onended = () => { this.pending.delete(source); source.disconnect(); filter?.disconnect(); env.disconnect(); };
+    source.start(when); source.stop(when + duration + 0.01);
+  }
 
   setTempo(bpm) {
     if (!Number.isFinite(bpm) || bpm < 1 || bpm > 999) throw new RangeError('Темп — от 1 до 999 BPM');
@@ -210,10 +261,22 @@ export class StandaloneMetronome extends Metronome {
     if (!this.on || !this.bpm || this.ctx?.state !== 'running') return;
     const now = this.ctx.currentTime;
     // После долгой задержки вкладки пропускаем старые удары без пачки щелчков.
-    for (const t of this.beatsBetween(Math.max(now, this.lastScheduled + 1e-5), now + 0.12)) {
-      this.click(t);
+    const pattern = DRUM_PATTERNS[this.pattern];
+    const subdivisions = this.pattern === 'click' ? 1 : 4;
+    const step = 60 / this.bpm / subdivisions;
+    const first = Math.max(0, Math.ceil((Math.max(now, this.lastScheduled + 1e-5) - this.offset) / step));
+    for (let k = first; ; k++) {
+      const t = this.offset + k * step;
+      if (t > now + 0.12) break;
+      if (this.pattern === 'click') this.click(t);
+      else {
+        const position = k % pattern.steps;
+        for (const voice of ['kick', 'snare', 'rim', 'hat', 'shaker']) {
+          if (pattern[voice]?.includes(position)) this.drum(voice, t, position % 4 ? 0.65 : 1);
+        }
+      }
       this.lastScheduled = t;
-      if (this.onBeat) {
+      if (this.onBeat && k % subdivisions === 0) {
         const timer = setTimeout(() => { this.visualTimers.delete(timer); this.onBeat?.(); }, Math.max(0, (t - now) * 1000));
         this.visualTimers.add(timer);
       }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { StandaloneMetronome } from '../metronome.js';
+import { StandaloneMetronome, DRUM_PATTERNS } from '../metronome.js';
 
 function setup() {
   const clicks = [];
@@ -48,3 +48,22 @@ test('accepts 1 through 999 BPM and rejects invalid input', () => {
   for (const bpm of [1, 20, 120.5, 400, 999]) { metro.setTempo(bpm); assert.equal(metro.bpm, bpm); }
   for (const bpm of [0, -1, 1000, NaN, Infinity]) assert.throws(() => metro.setTempo(bpm), RangeError);
 });
+for (const pattern of Object.keys(DRUM_PATTERNS).filter(id => id !== 'click')) {
+  test(`${pattern}: exact repeating bars without missing or duplicated hits`, () => {
+    const { metro, ctx } = setup();
+    const hits = [];
+    metro.drum = (voice, time) => hits.push({voice, time});
+    metro.setPattern(pattern);
+    const bar = DRUM_PATTERNS[pattern].steps * 0.125;
+    try {
+      metro.start();
+      for (let t = 10; t < 10 + bar * 3 - 0.12; t += 0.025) { ctx.currentTime = t; metro.schedule(); }
+      const first = hits.filter(h => h.time < 10.04 + bar - 1e-8);
+      const second = hits.filter(h => h.time >= 10.04 + bar - 1e-8 && h.time < 10.04 + bar * 2 - 1e-8);
+      assert.equal(first.length, second.length);
+      first.forEach((h,i) => { assert.equal(h.voice, second[i].voice); assert.ok(Math.abs(second[i].time - h.time - bar) < 1e-8); });
+      assert.equal(new Set(hits.map(h => `${h.voice}:${h.time}`)).size, hits.length);
+      metro.setPattern('click'); assert.equal(metro.pending.size, 0);
+    } finally { metro.stop(); }
+  });
+}

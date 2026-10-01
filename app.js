@@ -2,7 +2,7 @@ import { call, setKey, fileUrl, fileText, uploadFile } from './api.js';
 import { groupSongs, variantName, songKey, buildFileName, retitleFileName, parseFileName, AUDIO_EXT } from './parse.js';
 import { NEW_DAYS, NEW_SINCE } from './config.js';
 import { renderLyrics, editorToMarkup, COLORS } from './lyrics.js';
-import { Metronome, StandaloneMetronome, fitTaps } from './metronome.js?v=standalone1';
+import { Metronome, StandaloneMetronome, DRUM_PATTERNS, fitTaps } from './metronome.js?v=beats1';
 import { detectTempo, TEMPO_VERSION } from './tempo.js?v=metro3';
 
 const main = document.getElementById('main');
@@ -974,12 +974,18 @@ const player = (() => {
 // при поиске, прокрутке, переходах к ученикам и закрытии плеера.
 const standalone = (() => {
   const metro = new StandaloneMetronome();
+  const savedPattern = localGet('songs:standalone:pattern');
+  metro.setPattern(Object.hasOwn(DRUM_PATTERNS, savedPattern) ? savedPattern : 'click');
   const storedTempo = Number(localGet('songs:standalone:bpm'));
   metro.setTempo(storedTempo >= 1 && storedTempo <= 999 ? storedTempo : 120);
   const storedVolume = localGet('songs:standalone:volume');
   const volume = storedVolume === null ? 0.6 : Number(storedVolume);
   metro.setVolume(Number.isFinite(volume) && volume >= 0 && volume <= 1 ? volume : 0.6);
   const dot = h('span', { class: 'm-dot', 'aria-hidden': 'true' });
+  const pattern = h('select', { class: 'standalone-pattern', 'aria-label': 'Ритм самостоятельного метронома', onchange: e => {
+    metro.setPattern(e.target.value); localSet('songs:standalone:pattern', e.target.value);
+  } }, Object.entries(DRUM_PATTERNS).map(([id, info]) => h('option', { value: id }, info.name)));
+  pattern.value = metro.pattern;
   const bpm = h('input', { class: 'standalone-bpm', type: 'text', inputmode: 'decimal', value: metro.bpm, 'aria-label': 'Темп самостоятельного метронома', title: 'От 1 до 999 BPM, можно вводить дробное число' });
   const toggle = h('button', { class: 'btn primary small', type: 'button', 'aria-pressed': 'false', onclick: () => {
     if (metro.on) return stop();
@@ -991,6 +997,7 @@ const standalone = (() => {
     h('div', { class: 'standalone-inner' },
       h('div', { class: 'standalone-title' }, dot, h('strong', {}, 'Метроном'), h('span', { class: 'muted small' }, 'без песни')),
       h('div', { class: 'standalone-controls' },
+        pattern,
         h('button', { class: 'm-btn', type: 'button', 'aria-label': 'Уменьшить самостоятельный темп на 1', onclick: () => setTempo(Math.max(1, metro.bpm - 1)) }, '−'),
         h('label', { class: 'm-tempo' }, bpm, 'BPM'),
         h('button', { class: 'm-btn', type: 'button', 'aria-label': 'Увеличить самостоятельный темп на 1', onclick: () => setTempo(Math.min(999, metro.bpm + 1)) }, '+'),
