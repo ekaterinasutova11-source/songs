@@ -10,7 +10,7 @@ const SR = 11025;
 const FFT = 512;
 const HOP = 128;
 const FPS = SR / HOP; // ≈ 86 кадров в секунду
-export const TEMPO_VERSION = 2;
+export const TEMPO_VERSION = 3;
 
 const tick = () => new Promise(r => setTimeout(r));
 
@@ -149,23 +149,26 @@ export async function analyzeOnsets(env, { signal } = {}) {
   }
   // Уточнение сетки: точность BPM важна на длинных ровных фонограммах.
   candidates.sort((a, b) => b.value - a.value);
-  let best = { bpm: 60 * FPS / bestLag, score: -1, phase: 0 };
+  let best = { bpm: 60 * FPS / bestLag, score: -1, phase: 0, evidence: -1 };
   for (const candidate of candidates.filter(c => c.value > bestVal * 0.45).slice(0, 5)) {
     const center = candidate.bpm;
+    let local = { bpm: center, score: -1, phase: 0 };
     const range = Math.max(3, center * center / (60 * FPS) * 0.7);
     for (let bpm = Math.max(45, center - range); bpm <= Math.min(240, center + range); bpm += 0.1) {
       const g = gridScore(env, 60 * FPS / bpm);
-      if (g.score > best.score) best = { bpm, ...g };
+      if (g.score > local.score) local = { bpm, ...g };
     }
-    signal?.throwIfAborted();
-    await tick();
-  }
-  for (const [range, step] of [[0.12, 0.005]]) {
-    const center = best.bpm;
-    for (let bpm = center - range; bpm <= center + range; bpm += step) {
+    // Уточняем КАЖДОГО кандидата до сравнения. На длинной записи
+    // даже ошибка 0.04 BPM размывает сетку и скрывает верный темп.
+    const fineCenter = local.bpm;
+    for (let bpm = fineCenter - 0.12; bpm <= fineCenter + 0.12; bpm += 0.005) {
       const g = gridScore(env, 60 * FPS / bpm);
-      if (g.score > best.score) best = { bpm, ...g };
+      if (g.score > local.score) local = { bpm, ...g };
     }
+    // Учитываем повторяемость ритма, иначе частые восьмые побеждают
+    // четверти только за счёт количества атак на сетке.
+    const evidence = local.score * candidate.value / bestVal;
+    if (evidence > best.evidence) best = { ...local, evidence };
     signal?.throwIfAborted();
     await tick();
   }

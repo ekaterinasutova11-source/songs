@@ -26,6 +26,15 @@ for (const bpm of [60, 90, 120, 180, 220]) {
     assert.ok(result.beats.length >= expected.length - 2);
   });
 }
+for (const [bpm, duration] of [[104, 248], [93.6, 275]]) {
+  test(`long recording ${bpm} BPM: refine every candidate before selecting tempo`, async () => {
+    const { env, expected } = onsets(bpm, duration);
+    const result = await analyzeOnsets(env);
+    assert.ok(Math.abs(result.bpm - bpm) < 0.02, `got ${result.bpm}`);
+    assert.ok(result.beats.length >= expected.length - 2, 'half-tempo lost beats');
+    assert.ok(Math.abs(result.beats.at(-1) - expected.at(-1)) < 0.025, 'drift at end');
+  });
+}
 test('silence does not generate a tempo', async () => {
   await assert.rejects(analyzeOnsets(new Float32Array(3000)));
 });

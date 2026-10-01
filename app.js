@@ -2,8 +2,8 @@ import { call, setKey, fileUrl, fileText, uploadFile } from './api.js';
 import { groupSongs, variantName, songKey, buildFileName, retitleFileName, parseFileName, AUDIO_EXT } from './parse.js';
 import { NEW_DAYS, NEW_SINCE } from './config.js';
 import { renderLyrics, editorToMarkup, COLORS } from './lyrics.js';
-import { Metronome, fitTaps } from './metronome.js?v=metro2';
-import { detectTempo, TEMPO_VERSION } from './tempo.js?v=metro2';
+import { Metronome, fitTaps } from './metronome.js?v=metro3';
+import { detectTempo, TEMPO_VERSION } from './tempo.js?v=metro3';
 
 const main = document.getElementById('main');
 let role = null;         // 'teacher' | 'student'
