@@ -8,9 +8,17 @@
   <!-- Яндекс Диск не отдаёт файлы, если в запросе указан адрес github.io -->
   <meta name="referrer" content="no-referrer">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎵</text></svg>">
-  <link rel="stylesheet" href="style.css?v=beats1">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;1,500&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css?v=garden1">
+  <link rel="stylesheet" href="garden.css?v=garden1">
 </head>
 <body>
+  <header class="studio-header">
+    <div class="studio-brand"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 27V14m0 5C5 19 3 10 6 5c8-1 12 5 10 14zm0-4c0-8 4-12 11-11 2 7-3 13-11 11z"/></svg><div>Сад звука<span>место, где растёт голос</span></div></div>
+    <span class="studio-motto">Твой голос. Твой звук.</span>
+  </header>
   <main id="main"></main>
 
   <div id="player" class="player" hidden>
@@ -48,16 +56,17 @@
         <input class="m-vol" type="range" min="0" max="1" step="0.05" value="0.6" aria-label="Громкость метронома" title="Громкость метронома">
       </span>
     </div>
+    <div class="p-waveform"><canvas class="waveform-canvas" role="img" aria-label="Волновая форма выбранной записи"></canvas><span class="waveform-status" role="status"></span></div>
     <div class="p-timeline">
       <span class="p-cur">0:00</span>
       <input class="p-seek" type="range" min="0" max="1000" value="0" aria-label="Позиция">
       <span class="p-dur">0:00</span>
     </div>
     <div class="p-extra">
-      <button class="p-btn small p-metro-btn" aria-pressed="false" title="Метроном">
+      <button class="p-btn small p-metro-btn" aria-label="Метроном к песне" aria-pressed="false" title="Метроном">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2h4l5 19H5L10 2zm1.6 2L8.4 16h7.2L12.4 4h-.8zM7.9 18l-.5 1h9.2l-.5-1H7.9zM12 13l5.5-8.5 1.3.8L13.6 13H12z"/></svg>
       </button>
-      <button class="p-btn small p-loop" aria-pressed="false" title="Повторять">
+      <button class="p-btn small p-loop" aria-label="Повторять песню" aria-pressed="false" title="Повторять">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v3l4-4-4-4v3H5v6h2zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2z"/></svg>
       </button>
       <select class="p-speed" aria-label="Скорость" title="Скорость (тон не меняется)">
@@ -66,7 +75,7 @@
         <option value="1" selected>1×</option>
         <option value="1.1">1.1×</option>
       </select>
-      <a class="p-btn small p-dl" download title="Скачать">
+      <a class="p-btn small p-dl" download aria-label="Скачать аудио" title="Скачать">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4h2v9l3.5-3.5 1.4 1.4L12 16.8l-5.9-5.9 1.4-1.4L11 13zM5 18h14v2H5z"/></svg>
       </a>
       <button class="p-btn small p-close" aria-label="Закрыть плеер" title="Закрыть">
@@ -75,6 +84,6 @@
     </div>
   </div>
 
-  <script type="module" src="app.js?v=beats3"></script>
+  <script type="module" src="app.js?v=garden1"></script>
 </body>
 </html>
