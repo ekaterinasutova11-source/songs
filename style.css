@@ -205,6 +205,8 @@ button, input, select { font: inherit; color: inherit; }
 @media (prefers-color-scheme: dark) { .p-play { color: #1b1215; } }
 .p-play .i-pause, .p-play.playing .i-play { display: none; }
 .p-play.playing .i-pause { display: block; }
+.p-play .i-play  { transform: translateX(-1px); }  /* треугольник: центр был на 1,5px правее */
+.p-play .i-pause { transform: translateX(0); }     /* точка для подгонки паузы, если понадобится */
 .busy .p-play { animation: pulse 1s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .55; } }
 .p-loop[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
