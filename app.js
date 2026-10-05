@@ -2,8 +2,9 @@ import { call, setKey, fileUrl, fileText, uploadFile } from './api.js';
 import { groupSongs, variantName, songKey, buildFileName, retitleFileName, parseFileName, AUDIO_EXT } from './parse.js';
 import { NEW_DAYS, NEW_SINCE } from './config.js';
 import { renderLyrics, editorToMarkup, COLORS } from './lyrics.js';
-import { Metronome, fitTaps } from './metronome.js';
-import { detectTempo } from './tempo.js';
+import { Metronome, StandaloneMetronome, DRUM_PATTERNS, fitTaps } from './metronome.js?v=beats3';
+import { detectTempo, TEMPO_VERSION } from './tempo.js?v=metro3';
+import { loadWaveform, drawWaveform } from './waveform.js?v=garden1';
 
 const main = document.getElementById('main');
 let role = null;         // 'teacher' | 'student'
@@ -101,17 +102,20 @@ function showState(...children) {
 async function route(force = false, quiet = false) {
   const hash = location.hash.replace(/^#\/?/, '');
   const m = hash.match(/^([ts])\/([\w-]{8,})(?:\/s\/(.+))?$/);
-  if (!m) return hash ? renderOldLink() : renderLanding();
+  if (!m) { standalone.setVisible(false); return hash ? renderOldLink() : renderLanding(); }
   const [, mode, key, folder] = m;
+  if (mode !== 't' || libraryKey !== key) standalone.setVisible(false);
   if (!quiet || !library) showState(h('div', { class: 'spinner' }), 'Загружаю песни…');
   try {
     await ensureLibrary(key, force);
   } catch (e) {
+    if (e.status === 403) standalone.setVisible(false);
     return showState(
       h('p', {}, e.status === 403 ? 'Эта ссылка не работает.' : 'Не получилось загрузить песни.'),
       h('p', { class: 'muted' }, e.message),
       e.status === 403 ? null : h('button', { class: 'btn', onclick: () => route(true) }, 'Попробовать снова'));
   }
+  standalone.setVisible(role === 'teacher' && mode === 't');
   if (role === 'student' || mode === 's') return renderStudent(library[0]);
   if (folder) {
     const s = library.find(x => x.id === decodeURIComponent(folder));
@@ -181,7 +185,8 @@ function renderTeacher(key) {
     h('header', { class: 'page-head' },
       h('div', {},
         h('p', { class: 'eyebrow' }, 'Страница преподавателя'),
-        h('h1', {}, 'Ученики'),
+        h('h1', {}, 'Мои ученики'),
+        h('p', { class: 'page-phrase' }, 'Дать голосу свободу.'),
         h('p', { class: 'muted' }, `${plural(library.length, 'страничка', 'странички', 'страничек')} · ${plural(total, 'песня', 'песни', 'песен')}`)),
       h('div', { class: 'head-actions' },
         h('button', { class: 'btn primary', onclick: addStudent }, '+ Ученик'),
@@ -195,6 +200,7 @@ function studentCard(s, key) {
   const fresh = s.songs.filter(x => isNew(x.modified)).length;
   const href = `#/t/${key}/s/${encodeURIComponent(s.id)}`;
   return h('article', { class: 'student' },
+    h('div', { class: 'student-mark', 'aria-hidden': 'true' }, s.name.split(/\s+/).filter(x => /^\p{L}/u.test(x)).slice(0, 2).map(x => x[0]).join('')),
     h('a', { class: 'student-name', href }, s.name),
     h('p', { class: 'muted' }, plural(s.songs.length, 'песня', 'песни', 'песен'),
       fresh ? h('span', { class: 'badge' }, `новых: ${fresh}`) : null),
@@ -270,7 +276,9 @@ function renderStudent(student) {
     teacherTools,
     h('header', { class: 'page-head' },
       h('div', {},
+        h('p', { class: 'eyebrow' }, isTeacher ? 'Репертуар ученика' : 'Моя музыка'),
         h('h1', {}, student.name),
+        h('p', { class: 'page-phrase' }, 'Можно звучать по-своему.'),
         h('p', { class: 'muted' }, plural(student.songs.length, 'песня', 'песни', 'песен'))),
       h('div', { class: 'head-actions' }, addBtn)),
     addBox,
@@ -281,25 +289,47 @@ function renderStudent(student) {
 }
 
 // ---------- Карточка песни ----------
-// Раскрывающееся окно для чтения (текст песни или перевод) с кнопкой «Свернуть» внизу.
-function readingPane(label, load) {
-  const body = h('div', { class: 'lyrics-text' });
-  const box = h('div', { class: 'lyrics', hidden: true },
-    h('div', { class: 'pane-title' }, label), body,
-    h('button', { class: 'link-btn collapse', onclick: () => { set(false); box.parentNode?.parentNode?.scrollIntoView({ block: 'nearest' }); } }, 'Свернуть ▲'));
-  const btn = h('button', { class: 'link-btn', 'aria-expanded': 'false', onclick: () => set(box.hidden) }, label);
-  let loaded = false;
-  async function set(open) {
-    box.hidden = !open;
-    btn.setAttribute('aria-expanded', String(open));
-    btn.textContent = open ? `Свернуть: ${label.toLowerCase()}` : label;
-    btn.parentNode?.parentNode?.querySelector('.reading')?.classList.toggle('two', [...btn.parentNode.parentNode.querySelectorAll('.reading > .lyrics')].filter(x => !x.hidden).length > 1);
-    if (open && !loaded) {
-      body.textContent = 'Загружаю…';
-      try { body.innerHTML = renderLyrics(await load()); loaded = true; } catch (e) { body.textContent = e.message; }
+function songReading(song, student) {
+  const panel = h('section', { class: 'reading', hidden: true, 'aria-label': `Слова песни ${song.title}` });
+  const controls = h('div', { class: 'reading-modes', role: 'group', 'aria-label': `Текст и перевод: ${song.title}` });
+  let mode = 'closed';
+  const panes = {};
+  const addPane = (id, label, load) => {
+    const body = h('div', { class: 'lyrics-text' });
+    const box = h('div', { class: 'lyrics', hidden: true }, h('h3', { class: 'pane-title' }, label), body);
+    let job = null;
+    panes[id] = { box, async load() {
+      if (!job) {
+        body.textContent = 'Загружаю текст…';
+        job = Promise.resolve().then(load).then(text => { body.innerHTML = renderLyrics(text); })
+          .catch(e => { job = null; body.replaceChildren(h('p', {}, 'Не удалось загрузить текст.'), h('button', { class: 'btn small', onclick: () => panes[id].load() }, 'Повторить')); });
+      }
+      await job;
+    } };
+    panel.append(box);
+  };
+  if (song.lyrics) addPane('original', song.meta.translation ? 'Оригинал' : 'Текст песни', () => fileText(student.id, song.lyrics.name));
+  if (song.meta.translation) addPane('translation', 'Перевод', () => song.meta.translation);
+  const set = next => {
+    mode = next; panel.hidden = next === 'closed'; panel.classList.toggle('two', next === 'both');
+    for (const [id, pane] of Object.entries(panes)) {
+      const visible = next === id || next === 'both'; pane.box.hidden = !visible;
+      if (visible) pane.load();
     }
-  }
-  return { btn, box, set };
+    controls.querySelectorAll('[data-mode]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.mode === next)));
+  };
+  const button = (id, label) => h('button', { class: 'reading-mode', 'data-mode': id, 'aria-pressed': 'false', onclick: () => set(mode === id ? 'closed' : id) }, label);
+  if (panes.original) controls.append(button('original', panes.translation ? 'Оригинал' : 'Текст песни'));
+  if (panes.translation) controls.append(button('translation', 'Перевод'));
+  if (panes.original && panes.translation) controls.append(button('both', 'Рядом'));
+  panel.append(h('button', { class: 'link-btn collapse', onclick: () => set('closed') }, 'Свернуть текст'));
+  return { panel, controls, close: () => set('closed') };
+}
+
+function variantHelp(v) {
+  const slow = /медлен/i.test(v.label);
+  return v.kind === 'minus' ? (slow ? 'Поёшь и разбираешь детали' : 'Поёшь самостоятельно')
+    : v.kind === 'plus' ? (slow ? 'С вокалом · разбираешь детали' : 'С вокалом') : 'Слушаешь оригинал';
 }
 
 // «Импульс»: ученик вписывает 1–2 слова; преподаватель видит их у песни.
@@ -337,29 +367,26 @@ function impulseBlock(song, student) {
 function songCard(song, student, { owner = false } = {}) {
   const editorKey = `${student.id}|${song.key}`;
 
-  const lyrics = song.lyrics && readingPane('Текст песни', () => fileText(student.id, song.lyrics.name));
-  const translation = song.meta.translation && readingPane('Перевод', async () => song.meta.translation);
-  const reading = h('div', { class: 'reading' }, lyrics?.box, translation?.box);
+  const reader = songReading(song, student);
+  const reading = reader.panel;
 
   // Редактор: пока он открыт, окна для чтения и ссылки скрыты.
   const editBox = h('div', { class: 'editor', hidden: true });
-  const links = h('div', { class: 'song-links' }, lyrics?.btn, translation?.btn,
+  const links = h('div', { class: 'song-links' }, reader.controls,
     h('button', { class: 'link-btn', onclick: () => setEditing(true) }, 'Изменить'));
   function setEditing(on) {
     openEditor = on ? editorKey : null;
     editBox.hidden = !on;
     links.hidden = on;
-    reading.hidden = on;
     if (on) {
-      lyrics?.set(false);
-      translation?.set(false);
+      reader.close();
       editBox.replaceChildren(songEditor(song, student, { onClose: () => setEditing(false) }));
     } else {
       editBox.replaceChildren();
     }
   }
 
-  const card = h('article', { class: 'song' + (role === 'student' && !song.meta.impulse ? ' needs-impulse' : '') },
+  const card = h('article', { class: 'song' + (role === 'student' && !song.meta.impulse ? ' needs-impulse' : ''), 'data-song-id': `${student.id}|${song.key}` },
     h('div', { class: 'song-head' },
       h('h2', {}, song.title),
       isNew(song.modified) ? h('span', { class: 'badge' }, 'новое') : null,
@@ -370,8 +397,9 @@ function songCard(song, student, { owner = false } = {}) {
         h('button', {
           class: `chip ${v.kind}`, 'data-id': `${student.id}|${v.file.name}`,
           onclick: () => player.play(song, v, student),
-        }, variantName(v))))
+        }, h('span', { class: 'variant-label' }, variantName(v)), h('span', { class: 'variant-help' }, variantHelp(v)))))
       : h('p', { class: 'muted' }, 'Нет аудио — добавьте вариант в «Изменить».'),
+    h('div', { class: 'song-wave', hidden: true }, h('canvas', { class: 'waveform-canvas', role: 'img', 'aria-label': `Волновая форма: ${song.title}` })),
     song.meta.notes ? h('div', { class: 'notes' }, h('div', { class: 'pane-title' }, 'Заметки'), song.meta.notes) : null,
     links, reading, editBox);
   if (openEditor === editorKey) setEditing(true);
@@ -704,6 +732,39 @@ const player = (() => {
     loopBtn = $('.p-loop'), speed = $('.p-speed'), dl = $('.p-dl'), impulseEl = $('.p-impulse');
   let current = null;
   let token = 0;
+  let wavePeaks = null, waveController = null;
+  const waveStatus = $('.waveform-status');
+  const progress = () => audio.duration ? audio.currentTime / audio.duration : 0;
+  function paintWave() {
+    document.querySelectorAll('.waveform-canvas').forEach(canvas => {
+      if (canvas.closest('[hidden]')) return;
+      drawWaveform(canvas, wavePeaks, progress());
+    });
+  }
+  function cancelWave() {
+    waveController?.abort(); waveController = null; wavePeaks = null;
+    waveStatus.textContent = ''; paintWave();
+  }
+  async function prepareWave(cur) {
+    const cache = `songs:wave:1:${cur.id}:${cur.v.file.modified}:${cur.v.file.size}`;
+    try {
+      const saved = JSON.parse(localGet(cache));
+      if (Array.isArray(saved) && saved.length > 0 && saved.length <= 2048 && saved.every(x => Number.isFinite(x) && x >= 0 && x <= 1)) {
+        wavePeaks = Float32Array.from(saved); waveStatus.textContent = ''; markActive(); return;
+      }
+    } catch {}
+    const controller = new AbortController(); waveController = controller;
+    waveStatus.textContent = 'Готовим волновую форму…';
+    try {
+      const peaks = await loadWaveform(cur.url, controller.signal);
+      if (controller.signal.aborted || current !== cur) return;
+      wavePeaks = peaks; waveStatus.textContent = '';
+      localSet(cache, JSON.stringify(Array.from(peaks, x => Math.round(x * 1000) / 1000)));
+      markActive();
+    } catch (e) {
+      if (!controller.signal.aborted && current === cur) waveStatus.textContent = 'Волновая форма недоступна';
+    } finally { if (waveController === controller) waveController = null; }
+  }
 
   const fmt = t => {
     if (!isFinite(t)) return '0:00';
@@ -713,10 +774,16 @@ const player = (() => {
 
   function markActive() {
     document.querySelectorAll('.chip.active').forEach(c => c.classList.remove('active'));
+    document.querySelectorAll('.song').forEach(card => {
+      const selected = !!current && card.dataset.songId === `${current.student.id}|${current.song.key}`;
+      card.classList.toggle('selected-song', selected);
+      const wave = card.querySelector('.song-wave'); if (wave) wave.hidden = !selected || !wavePeaks;
+    });
     if (!current) return;
     document.querySelectorAll('.chip').forEach(c => {
       if (c.dataset.id === current.id) c.classList.add('active');
     });
+    paintWave();
   }
 
   function failed(text) {
@@ -731,6 +798,11 @@ const player = (() => {
       return audio.paused ? audio.play() : audio.pause();
     }
     const my = ++token;
+    cancelWave();
+    cancelTempo();
+    cancelTaps();
+    audio.pause();
+    metro.setGrid(0, 0);
     current = { id, song, v, student, url: null };
     bar.hidden = false;
     document.body.classList.add('has-player');
@@ -738,16 +810,18 @@ const player = (() => {
     impulseEl.textContent = song.meta?.impulse || '';
     title.textContent = song.title;
     sub.textContent = variantName(v);
+    seek.value = 0; seek.style.setProperty('--p', '0%'); cur.textContent = '0:00'; dur.textContent = '0:00';
     bar.classList.add('busy');
     markActive();
     try {
       const url = await fileUrl(student.id, v.file.name);
       if (my !== token) return;
       current.url = url;
-      if (metro.on) loadTempo();
+      prepareWave(current);
       const wasRate = audio.playbackRate;
       audio.src = url;
       audio.playbackRate = wasRate;
+      if (metro.on) loadTempo();
       dl.href = url;
       if ('mediaSession' in navigator) {
         navigator.mediaSession.metadata = new MediaMetadata({ title: song.title, artist: variantName(v) });
@@ -765,61 +839,80 @@ const player = (() => {
   const metroBtn = $('.p-metro-btn'), metroBox = $('.p-metro');
   const mBpm = metroBox.querySelector('.m-bpm'), mStatus = metroBox.querySelector('.m-status'), mDot = metroBox.querySelector('.m-dot');
   const tapBtn = metroBox.querySelector('[data-act="tapTempo"]');
-  let tempoToken = 0, saveTimer = null;
+  const bpmInput = metroBox.querySelector('.m-bpm-input');
+  const saveBeatBtn = metroBox.querySelector('[data-act="save"]');
+  let tempoToken = 0, analysisController = null;
+  function cancelTempo() { tempoToken++; analysisController?.abort(); analysisController = null; }
+  const cacheKey = cur => `songs:tempo:${TEMPO_VERSION}:${cur.id}:${cur.v.file.modified}:${cur.v.file.size}`;
 
   // Доли храним компактно: миллисекунды, каждая следующая — разницей с предыдущей.
   const encodeBeats = beats => beats.map((t, i) => Math.round(t * 1000) - (i ? Math.round(beats[i - 1] * 1000) : 0)).join(',');
   const decodeBeats = str => { let acc = 0; return str.split(',').map(x => (acc += Number(x)) / 1000); };
 
   const showBpm = (note = '') => {
-    if (!metro.bpm) return;
+    saveBeatBtn.hidden = role !== 'teacher';
+    if (!metro.bpm) { mBpm.textContent = '♩ = …'; bpmInput.value = ''; mStatus.textContent = note; return; }
     const rate = audio.playbackRate || 1;
     mBpm.textContent = `♩ = ${Math.round(metro.bpm)}`;
+    if (document.activeElement !== bpmInput) bpmInput.value = String(Math.round(metro.bpm * 100) / 100);
     mStatus.textContent = note || (rate !== 1 ? `сейчас ${Math.round(metro.bpm * rate)} при ${rate}×` : '');
   };
 
-  // Темп каждого файла определяется один раз и запоминается в данных песни.
+  // Старые автоматические доли пересчитываем. Ручные настройки сохраняем.
+  // Автоанализ хранится с версией в браузере; преподаватель может подтвердить его.
   async function loadTempo(force = false) {
     const cur = current;
     if (!cur?.url) return;
-    const my = ++tempoToken;
+    cancelTempo();
+    cancelTaps();
+    const my = tempoToken;
     const saved = cur.song.meta?.tempo?.[cur.v.file.name];
-    if (saved && !force && (saved.manual || saved.beats)) {
-      if (saved.beats) metro.setBeats(decodeBeats(saved.beats), saved.bpm);
-      else metro.setGrid(saved.bpm, saved.offset);
-      return showBpm(saved.manual ? 'настучано вручную' : '');
+    let cached;
+    try { cached = JSON.parse(localGet(cacheKey(cur))); } catch {}
+    const selected = !force && (cached?.remote === JSON.stringify(saved ?? null) ? cached : saved?.manual ? saved : null);
+    if (selected && Number.isFinite(selected.bpm) && selected.bpm > 20 && selected.bpm < 400) {
+      const beats = selected.beats ? decodeBeats(selected.beats) : null;
+      if (beats?.length && beats.every((b, i) => Number.isFinite(b) && (!i || b > beats[i - 1]))) metro.setBeats(beats, selected.bpm);
+      else metro.setGrid(selected.bpm, selected.offset || 0);
+      return showBpm(selected.manual ? 'настроено вручную' : selected.uncertain ? 'Проверьте доли — результат неточный' : 'авто · проверьте совпадение');
     }
     metro.setGrid(0, 0);
-    mBpm.textContent = '♩ = …';
+    showBpm();
+    analysisController = new AbortController();
     try {
-      const t = await detectTempo(cur.url, { onProgress: text => { if (my === tempoToken) mStatus.textContent = text; } });
-      if (my !== tempoToken) return;
+      const t = await detectTempo(cur.url, { signal: analysisController.signal, onProgress: text => { if (my === tempoToken) mStatus.textContent = text; } });
+      if (my !== tempoToken || current !== cur) return;
       metro.setBeats(t.beats, t.bpm);
-      showBpm();
-      rememberTempo(cur);
+      showBpm(t.uncertain ? 'Проверьте доли — результат неточный' : 'авто · проверьте совпадение');
+      rememberTempo(cur, false, t.uncertain);
     } catch (e) {
       if (my === tempoToken) { mBpm.textContent = '♩ = ?'; mStatus.textContent = 'Не получилось определить темп — попробуйте «Настучать»'; }
     }
   }
 
-  function rememberTempo(cur = current, delay = 0, manual = false) {
-    const t = { bpm: metro.bpm, offset: metro.offset };
+  function rememberTempo(cur = current, manual = true, uncertain = false) {
+    if (!cur || !metro.bpm) return;
+    const t = { bpm: Math.round(metro.bpm * 1000) / 1000, offset: Math.round(metro.offset * 1000) / 1000 };
     if (metro.beats) t.beats = encodeBeats(metro.beats);
     if (manual) t.manual = true;
-    cur.song.meta ||= {};
-    cur.song.meta.tempo = { ...cur.song.meta.tempo, [cur.v.file.name]: t };
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
-      saveMeta(cur.student.id, cur.song.key, { patch: { tempo: { [cur.v.file.name]: t } } })
-        .catch(e => toast('Темп не сохранился: ' + e.message, 'error'));
-    }, delay);
+    let saved = Promise.resolve(true);
+    if (manual && role === 'teacher') {
+      cur.song.meta ||= {};
+      cur.song.meta.tempo = { ...cur.song.meta.tempo, [cur.v.file.name]: t };
+      saved = saveMeta(cur.student.id, cur.song.key, { patch: { tempo: { [cur.v.file.name]: t } } })
+        .then(() => true).catch(e => { toast('Темп не сохранился: ' + e.message, 'error'); return false; });
+    }
+    localSet(cacheKey(cur), JSON.stringify({ ...t, uncertain, remote: JSON.stringify(cur.song.meta?.tempo?.[cur.v.file.name] ?? null) }));
+    return saved;
   }
 
   metroBtn.addEventListener('click', () => {
     if (metro.on) {
       metro.stop();
-      tempoToken++;
+      cancelTempo();
+      cancelTaps();
     } else {
+      standalone.stop();
       metro.start();
       loadTempo();
     }
@@ -830,6 +923,10 @@ const player = (() => {
 
   // «Настучать»: нажимайте в такт музыке; после 8 нажатий (или паузы) темп готов.
   let taps = [], tapTimer = null;
+  function cancelTaps() {
+    clearTimeout(tapTimer); taps = [];
+    tapBtn.textContent = 'Настучать'; tapBtn.classList.remove('active');
+  }
   function finishTaps() {
     clearTimeout(tapTimer);
     const fit = fitTaps(taps);
@@ -839,7 +936,7 @@ const player = (() => {
     if (!fit) return showBpm('Не получилось — стучите ровно, хотя бы 4 раза');
     metro.setGrid(fit.bpm, fit.offset);
     showBpm('настучано вручную');
-    rememberTempo(current, 0, true);
+    rememberTempo();
   }
 
   metroBox.addEventListener('click', e => {
@@ -847,6 +944,7 @@ const player = (() => {
     if (!act || !current) return;
     if (act === 'tapTempo') {
       if (audio.paused) return toast('Включите песню и стучите по кнопке в такт');
+      if (!taps.length) { cancelTempo(); metro.setGrid(0, 0); }
       taps.push(metro.heardTime());
       tapBtn.classList.add('active');
       tapBtn.textContent = `Ещё… ${taps.length}/8`;
@@ -857,15 +955,33 @@ const player = (() => {
     }
     if (act === 'auto') return loadTempo(true);
     if (!metro.bpm) return;
+    cancelTempo();
     if (act === 'half') metro.half();
     if (act === 'double') metro.double();
+    if (act === 'earlier') metro.shift(-0.01);
+    if (act === 'later') metro.shift(0.01);
     if (act === 'align') {
       if (audio.paused) return toast('Включите песню и нажмите точно в момент доли');
       metro.alignTo(metro.heardTime());
     }
     showBpm();
-    rememberTempo(current, 1500, !!current.song.meta?.tempo?.[current.v.file.name]?.manual);
+    const target = current;
+    rememberTempo().then(ok => {
+      if (act === 'save' && current === target) showBpm(ok ? 'доли сохранены' : 'сохранено только в этом браузере');
+    });
   });
+  bpmInput.addEventListener('change', () => {
+    const bpm = Number(bpmInput.value.replace(',', '.'));
+    if (!(bpm > 20 && bpm < 400)) { toast('Введите темп от 21 до 399 BPM'); return showBpm(); }
+    cancelTempo(); cancelTaps();
+    // При смене BPM сохраняем ближайшую текущую долю как опорную точку.
+    const t = audio.currentTime;
+    const anchor = metro.beats ? metro.beats[metro.nearestIndex(t)]
+      : metro.bpm ? metro.offset + Math.round((t - metro.offset) * metro.bpm / 60) * 60 / metro.bpm : t;
+    metro.setGrid(bpm, anchor);
+    showBpm('настроено вручную'); rememberTempo();
+  });
+  for (const ev of ['pause', 'seeking', 'ratechange']) audio.addEventListener(ev, cancelTaps);
   metroBox.querySelector('.m-vol').addEventListener('input', e => metro.setVolume(Number(e.target.value)));
   metro.onBeat = () => { mDot.classList.remove('beat'); void mDot.offsetWidth; mDot.classList.add('beat'); };
   audio.addEventListener('ratechange', () => showBpm());
@@ -881,6 +997,8 @@ const player = (() => {
   $('.p-close').addEventListener('click', () => {
     audio.pause();
     token++;
+    cancelWave();
+    cancelTempo(); cancelTaps();
     current = null;
     if (metro.on) metroBtn.click();
     bar.hidden = true;
@@ -897,8 +1015,21 @@ const player = (() => {
     seek.value = Math.round(audio.currentTime / audio.duration * 1000);
     seek.style.setProperty('--p', seek.value / 10 + '%');
     cur.textContent = fmt(audio.currentTime);
+    paintWave();
   });
   audio.addEventListener('loadedmetadata', () => { dur.textContent = fmt(audio.duration); });
+  audio.addEventListener('seeked', paintWave);
+  document.addEventListener('click', e => {
+    if (!e.target.matches('.waveform-canvas') || !current || !Number.isFinite(audio.duration)) return;
+    const rect = e.target.getBoundingClientRect();
+    audio.currentTime = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) * audio.duration;
+  });
+  new ResizeObserver(() => {
+    document.documentElement.style.setProperty('--player-height', `${bar.hidden ? 0 : bar.getBoundingClientRect().height}px`);
+    paintWave();
+  }).observe(bar);
+  new ResizeObserver(paintWave).observe(main);
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', paintWave);
   audio.addEventListener('play', () => { playBtn.classList.add('playing'); playBtn.setAttribute('aria-label', 'Пауза'); });
   audio.addEventListener('pause', () => { playBtn.classList.remove('playing'); playBtn.setAttribute('aria-label', 'Играть'); });
   audio.addEventListener('error', () => {
@@ -917,7 +1048,59 @@ const player = (() => {
   // После перерисовки страницы подсветить играющий вариант.
   new MutationObserver(markActive).observe(main, { childList: true, subtree: true });
 
-  return { play };
+  return { play, stopSongMetronome() { if (metro.on) metroBtn.click(); } };
+})();
+
+// Виджет находится вне перерисовываемой библиотеки и остаётся на экране
+// при поиске, прокрутке, переходах к ученикам и закрытии плеера.
+const standalone = (() => {
+  const metro = new StandaloneMetronome();
+  const savedPattern = localGet('songs:standalone:pattern');
+  metro.setPattern(Object.hasOwn(DRUM_PATTERNS, savedPattern) ? savedPattern : 'click');
+  const storedTempo = Number(localGet('songs:standalone:bpm'));
+  metro.setTempo(storedTempo >= 1 && storedTempo <= 999 ? storedTempo : 120);
+  const storedVolume = localGet('songs:standalone:volume');
+  const volume = storedVolume === null ? 0.6 : Number(storedVolume);
+  metro.setVolume(Number.isFinite(volume) && volume >= 0 && volume <= 1 ? volume : 0.6);
+  const dot = h('span', { class: 'm-dot', 'aria-hidden': 'true' });
+  const pattern = h('select', { class: 'standalone-pattern', 'aria-label': 'Ритм самостоятельного метронома', onchange: e => {
+    metro.setPattern(e.target.value); localSet('songs:standalone:pattern', e.target.value);
+  } }, Object.entries(DRUM_PATTERNS).map(([id, info]) => h('option', { value: id }, info.name)));
+  pattern.value = metro.pattern;
+  const bpm = h('input', { class: 'standalone-bpm', type: 'text', inputmode: 'decimal', value: metro.bpm, 'aria-label': 'Темп самостоятельного метронома', title: 'От 1 до 999 BPM, можно вводить дробное число' });
+  const toggle = h('button', { class: 'btn primary small', type: 'button', 'aria-pressed': 'false', onclick: () => {
+    if (metro.on) return stop();
+    if (!setTempo(bpm.value)) return;
+    try { player.stopSongMetronome(); metro.start(); update(); }
+    catch (e) { stop(); toast('Не удалось включить метроном: ' + e.message, 'error'); }
+  } }, 'Запустить');
+  const widget = h('section', { class: 'standalone-widget', hidden: true, 'aria-label': 'Самостоятельный метроном' },
+    h('div', { class: 'standalone-inner' },
+      h('div', { class: 'standalone-title' }, dot, h('strong', {}, 'Метроном'), h('span', { class: 'muted small' }, 'без песни')),
+      h('div', { class: 'standalone-controls' },
+        pattern,
+        h('button', { class: 'm-btn', type: 'button', 'aria-label': 'Уменьшить самостоятельный темп на 1', onclick: () => setTempo(Math.max(1, metro.bpm - 1)) }, '−'),
+        h('label', { class: 'm-tempo' }, bpm, 'BPM'),
+        h('button', { class: 'm-btn', type: 'button', 'aria-label': 'Увеличить самостоятельный темп на 1', onclick: () => setTempo(Math.min(999, metro.bpm + 1)) }, '+'),
+        toggle,
+        h('input', { class: 'm-vol', type: 'range', min: 0, max: 1, step: 0.05, value: metro.volume, 'aria-label': 'Громкость самостоятельного метронома', oninput: e => {
+          metro.setVolume(Number(e.target.value)); localSet('songs:standalone:volume', metro.volume);
+        } }))));
+  main.before(widget);
+  function update() { toggle.textContent = metro.on ? 'Остановить' : 'Запустить'; toggle.setAttribute('aria-pressed', String(metro.on)); }
+  function stop() { metro.stop(); dot.classList.remove('beat'); update(); }
+  function setTempo(value) {
+    const number = Number(String(value).replace(',', '.'));
+    if (!Number.isFinite(number) || number < 1 || number > 999) {
+      bpm.value = String(metro.bpm); toast('Введите темп от 1 до 999 BPM'); return false;
+    }
+    metro.setTempo(number); bpm.value = String(number); localSet('songs:standalone:bpm', number); return true;
+  }
+  bpm.addEventListener('change', () => setTempo(bpm.value));
+  bpm.addEventListener('keydown', e => { if (e.key === 'Enter') { setTempo(bpm.value); bpm.blur(); } });
+  metro.onBeat = () => { dot.classList.remove('beat'); void dot.offsetWidth; dot.classList.add('beat'); };
+  window.addEventListener('pagehide', stop);
+  return { stop, setVisible(visible) { widget.hidden = !visible; if (!visible) stop(); } };
 })();
 
 route();

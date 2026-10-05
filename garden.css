@@ -1,0 +1,160 @@
+:root {
+  --bg: #f5f0f7; --surface: #fdfafd; --surface-2: #eae1f1;
+  --text: #403449; --muted: #766580; --line: #dcd0e4;
+  --accent: #79558c; --accent-soft: #e9dcf1; --wave-rest: #bba5c8;
+  --plus: #75518a; --plus-soft: #eee3f4; --minus: #466659; --minus-soft: #e4eee7;
+  --orig: #716047; --orig-soft: #f1ebdf; --radius: 22px;
+  --shadow: 0 5px 24px rgb(72 44 89 / .035);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #24212c; --surface: #2e2838; --surface-2: #393044;
+    --text: #f0e7f4; --muted: #bfacc9; --line: #51425f;
+    --accent: #d1ace5; --accent-soft: #4b3858; --wave-rest: #796688;
+    --plus: #d6b2ec; --plus-soft: #44334f; --minus: #b0d7c0; --minus-soft: #2d4037;
+    --orig: #dcc7a2; --orig-soft: #403a2d; --shadow: none;
+  }
+}
+body { font-family: 'Manrope', system-ui, sans-serif; font-size: 15px; }
+[hidden] { display: none !important; }
+button, a, input, select, [contenteditable] { -webkit-tap-highlight-color: transparent; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.studio-header { max-width: 1040px; margin: auto; padding: 28px 24px 20px; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.studio-brand { display: flex; align-items: center; gap: 12px; font: 500 31px/1.1 'Cormorant Garamond', Georgia, serif; }
+.studio-brand svg { width: 29px; height: 34px; stroke: var(--accent); stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+.studio-brand span { display: block; margin-top: 7px; font: 500 10px/1.5 'Manrope', sans-serif; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.studio-motto { font-size: 12px; color: var(--muted); }
+main { max-width: 1040px; padding: 30px 24px 64px; }
+body.has-player main, body.has-player:has(.player.with-metro) main { padding-bottom: calc(var(--player-height, 240px) + 48px); }
+h1 { font: 500 clamp(38px, 5.5vw, 56px)/1.08 'Cormorant Garamond', Georgia, serif; letter-spacing: -.025em; margin-bottom: 10px; }
+.page-head { margin-bottom: 28px; align-items: center; }
+.eyebrow { font-size: 10px; font-weight: 700; letter-spacing: .13em; margin-bottom: 9px; }
+.page-phrase { color: var(--accent); font: italic 500 23px/1.4 'Cormorant Garamond', Georgia, serif; margin: 0 0 9px; }
+.page-head .muted { font-size: 12px; }
+.btn { font-size: 13px; padding: 10px 16px; border-radius: 12px; }
+.btn.small { font-size: 12px; padding: 8px 12px; }
+.btn.primary { color: #fff8ff; }
+@media(prefers-color-scheme:dark) { .btn.primary { color: #31203d; } }
+.search { background: var(--surface); padding: 14px 17px; border-radius: 14px; font-size: 14px; }
+.sort { font-size: 12px; padding: 0 12px; max-width: 150px; }
+.toolbar { gap: 12px; margin-bottom: 22px; }
+.students { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 18px; }
+.student { padding: 24px; gap: 8px; border-color: var(--line); position: relative; }
+.student-mark { display: grid; place-items: center; width: 49px; height: 49px; background: var(--surface-2); color: var(--accent); font: 500 24px 'Cormorant Garamond', Georgia, serif; border-radius: 50% 50% 8px 50%; margin-bottom: 7px; }
+.student-name { font-weight: 500; font-size: 16px; }
+.student>p { font-size: 12px; }
+.student-actions { margin-top: 14px; gap: 8px; }
+.badge { font-size: 10px; font-weight: 600; }
+.hint { font-size: 11px; margin-top: 26px; max-width: 650px; }
+.songs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; align-items: start; }
+.song { min-width: 0; padding: 23px; border-radius: 22px; transition: border-color .2s; }
+.song:has(.reading:not([hidden])), .song:has(.editor:not([hidden])) { grid-column: 1 / -1; }
+.song.selected-song { border-color: var(--accent); }
+.song-head { align-items: center; margin-bottom: 16px; gap: 7px; }
+.song h2 { font: 500 29px/1.15 'Cormorant Garamond', Georgia, serif; overflow-wrap: anywhere; }
+.owner { font-size: 11px; }
+.variants { gap: 8px; }
+.chip { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; position: relative; padding: 10px 12px 10px 28px; border-radius: 12px; font-size: 12px; flex: 1 1 125px; min-width: 0; text-align: left; }
+.chip::before { position: absolute; left: 12px; top: 14px; border-left-width: 5px; border-top-width: 4px; border-bottom-width: 4px; }
+.chip.active { box-shadow: none; }
+.variant-label { font-weight: 600; overflow-wrap: anywhere; }
+.variant-help { font-size: 10px; font-weight: 400; line-height: 1.4; }
+.impulse { margin: 0 0 15px; font-size: 12px; }
+.impulse.empty { font-size: 10px; padding: 0; border: 0; background: transparent; color: var(--muted); }
+.impulse.required { border: 1px solid var(--line); background: var(--surface-2); padding: 12px; }
+.impulse-input { font-size: 13px; }
+.impulse-hint { font-size: 11px; }
+.impulse-word { font-weight: 500; }
+.notes { font-size: 13px; border-left-width: 2px; padding: 12px 14px; }
+.song-links { justify-content: space-between; align-items: center; gap: 10px; margin-top: 17px; }
+.song-links>.link-btn { margin: 0; font-size: 11px; color: var(--muted); }
+.reading-modes { display: flex; flex-wrap: wrap; gap: 5px; }
+.reading-mode { border: 1px solid var(--line); background: transparent; padding: 7px 10px; border-radius: 9px; font-size: 11px; cursor: pointer; }
+.reading-mode[aria-pressed="true"] { background: var(--accent); color: #fff8ff; border-color: var(--accent); }
+.reading { margin-top: 22px; padding-top: 22px; border-top: 1px solid var(--line); gap: 24px; }
+.lyrics { margin: 0; padding: 20px 22px; border-radius: 15px; background: var(--surface-2); white-space: normal; min-width: 0; }
+.lyrics-text { white-space: pre-wrap; font-size: 16px; line-height: 1.95; overflow-wrap: anywhere; }
+.pane-title { font: 600 10px/1.5 'Manrope', sans-serif; letter-spacing: .12em; margin: 0 0 16px; }
+.reading .collapse { grid-column: 1 / -1; justify-self: start; margin: 0; font-size: 11px; color: var(--muted); }
+.teacher-tools { margin-bottom: 26px; }
+.field, .lyrics-edit { background: var(--surface); }
+.editor-footer { border-radius: 14px; }
+body.has-player .editor-footer, body.has-player:has(.player.with-metro) .editor-footer { bottom: calc(var(--player-height, 240px) + 8px); }
+.standalone-widget { margin: 0 0 0; background: var(--surface-2); border-top: 1px solid var(--line); box-shadow: 0 3px 12px rgb(72 44 89 / .04); }
+.standalone-inner { max-width: 1040px; padding: 12px 24px; gap: 8px 18px; }
+.standalone-title strong { font: 600 22px 'Cormorant Garamond', Georgia, serif; }
+.standalone-title>.small { font-size: 10px; }
+.standalone-pattern { max-width: 210px; width: 190px; border-radius: 10px; background: var(--surface); font-size: 12px; height: 36px; }
+.standalone-bpm { height: 36px; font-size: 15px; background: var(--surface); border-radius: 10px; }
+.standalone-controls .btn { min-width: 95px; }
+.m-btn { border-radius: 9px; height: 34px; font-size: 12px; }
+.standalone-controls .m-vol { width: 72px; }
+.player { border: 1px solid var(--line); border-bottom: 0; background: var(--surface); width: min(992px, calc(100% - 32px)); margin: auto; border-radius: 22px 22px 0 0; padding: 14px 22px calc(13px + env(safe-area-inset-bottom)); box-shadow: 0 -4px 25px rgb(61 37 78 / .07); grid-template-areas: "info controls extra" "wave wave wave" "time time time" "metro metro metro"; gap: 8px 16px; }
+.p-title { font: 600 22px 'Cormorant Garamond', Georgia, serif; }
+.p-sub { font-size: 10px; }
+.p-play { width: 43px; height: 43px; }
+.p-btn { width: 34px; height: 34px; }
+.p-btn.small { width: 30px; height: 30px; }
+.p-extra { flex-wrap: wrap; justify-content: flex-end; gap: 2px; }
+.p-speed { font-size: 11px; }
+.p-impulse { font-size: 11px; }
+.p-timeline { font-size: 10px; gap: 12px; }
+.p-waveform { grid-area: wave; position: relative; height: 44px; }
+.waveform-canvas { display: block; width: 100%; height: 44px; cursor: pointer; }
+.song-wave { margin: 16px 0 0; }
+.song-wave .waveform-canvas { height: 48px; }
+.waveform-status { position: absolute; inset: 0; display: grid; place-items: center; font-size: 10px; color: var(--muted); pointer-events: none; }
+.waveform-status:empty { display: none; }
+.p-seek::-webkit-slider-runnable-track { height: 2px; }
+.p-seek::-webkit-slider-thumb { width: 10px; height: 10px; margin-top: -4px; }
+.p-metro { padding: 10px; border-radius: 12px; gap: 8px; }
+.m-status { font-size: 11px; }
+.m-bpm { font-size: 12px; }
+@media(prefers-color-scheme:dark) { .reading-mode[aria-pressed="true"], .p-play, .p-impulse, .m-btn.active { color: #31203d; } }
+@media (min-width: 760px) { .reading.two { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+@media (max-width: 700px) {
+  .studio-header { padding: 24px 18px 18px; }
+  .studio-brand { font-size: 28px; }
+  .studio-motto { max-width: 105px; font-size: 10px; text-align: right; }
+  main { padding: 24px 18px 48px; }
+  .songs { grid-template-columns: 1fr; gap: 15px; }
+  .student, .song { padding: 21px; }
+  .page-head { align-items: flex-start; gap: 14px; }
+  .head-actions { gap: 7px; }
+  .page-phrase { font-size: 21px; }
+  .toolbar { gap: 8px; }
+  .sort { max-width: 140px; padding: 0 7px; font-size: 11px; }
+  .standalone-inner { padding: 10px 18px; gap: 7px; }
+  .standalone-controls { gap: 7px; }
+  .standalone-title { width: 100%; }
+  .standalone-pattern { width: 100%; max-width: 100%; flex-basis: 100%; }
+  .player { width: 100%; border-radius: 18px 18px 0 0; padding: 11px 16px calc(10px + env(safe-area-inset-bottom)); grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "info extra" "wave wave" "time time" "controls controls" "metro metro"; gap: 6px 10px; }
+  .p-controls { gap: 20px; }
+  .p-waveform, .waveform-canvas { height: 35px; }
+  .p-extra { max-width: 210px; }
+  .p-title { font-size: 20px; }
+  .m-status { flex-basis: 100%; }
+  .lyrics { padding: 18px; }
+  .lyrics-text { font-size: 15px; line-height: 1.85; }
+  input.field, .search, .standalone-bpm, .m-bpm-input, select { font-size: 16px; }
+  .toolbar { flex-wrap: wrap; }
+  .toolbar .search { flex-basis: 100%; }
+  .toolbar .sort { height: 36px; max-width: 100%; font-size: 12px; }
+  .standalone-pattern { font-size: 13px; }
+  .p-speed { font-size: 12px; }
+}
+@media(max-width:380px) {
+  main { padding-left: 12px; padding-right: 12px; }
+  .studio-header { padding-left: 12px; padding-right: 12px; }
+  .studio-motto { display: none; }
+  .standalone-inner { padding-left: 12px; padding-right: 12px; }
+  .standalone-controls { gap: 5px; }
+  .standalone-bpm { width: 60px; }
+  .standalone-controls .m-vol { width: 54px; }
+  .standalone-controls .btn { min-width: 80px; padding-left: 9px; padding-right: 9px; }
+  .p-extra { max-width: 174px; }
+  .p-btn.small { width: 28px; height: 28px; }
+  .p-speed { max-width: 54px; }
+  .song, .student { padding: 18px; }
+}
+@media(prefers-reduced-motion:reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }

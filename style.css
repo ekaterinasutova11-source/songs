@@ -439,6 +439,8 @@ body.has-player .editor-footer { bottom: 118px; }
 .m-btn:hover { border-color: var(--muted); }
 .m-btn.wide { font-weight: 500; }
 .m-vol { width: 90px; accent-color: var(--accent); }
+.m-tempo { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+.m-bpm-input { width: 70px; height: 32px; border: 1px solid var(--line); border-radius: 8px; padding: 0 6px; background: var(--surface); color: var(--text); font: inherit; }
 .m-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--line); }
 .m-dot.beat { animation: beat .18s ease-out; }
 @keyframes beat { from { background: var(--accent); transform: scale(1.35); } to { background: var(--line); transform: scale(1); } }
@@ -451,3 +453,18 @@ body.has-player:has(.player.with-metro) .editor-footer { bottom: 170px; }
   body.has-player:has(.player.with-metro) .editor-footer { bottom: 250px; }
 }
 .m-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* Постоянный метроном преподавателя */
+.standalone-widget { position: sticky; top: 0; z-index: 20; background: var(--surface); border-bottom: 1px solid var(--line); box-shadow: var(--shadow); padding-top: env(safe-area-inset-top); }
+.standalone-widget[hidden] { display: none; }
+.standalone-inner { max-width: 820px; margin: 0 auto; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; }
+.standalone-title, .standalone-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.standalone-title strong { font-size: 15px; }
+.standalone-bpm { width: 72px; height: 32px; padding: 0 6px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-2); font-variant-numeric: tabular-nums; }
+.standalone-controls .btn { min-width: 100px; }
+.standalone-pattern { max-width: 165px; height: 32px; padding: 0 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); font-size: 14px; }
+@media (max-width: 430px) {
+  .standalone-inner { gap: 6px; padding: 8px 12px; }
+  .standalone-controls { gap: 5px; }
+  .standalone-controls .m-vol { width: 62px; }
+}
