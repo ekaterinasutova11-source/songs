@@ -158,3 +158,6 @@ body.has-player .editor-footer, body.has-player:has(.player.with-metro) .editor-
   .song, .student { padding: 18px; }
 }
 @media(prefers-reduced-motion:reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+/* A quiet, visible explanation while working from an older reserve snapshot. */
+.reserve-notice { padding: 12px 20px; background: #eee6f5; color: #554761; font-size: 14px; line-height: 1.5; text-align: center; }
+.reserve-notice[hidden] { display: none; }

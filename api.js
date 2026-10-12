@@ -1,21 +1,42 @@
 // Запросы к посреднику в Yandex Cloud.
-import { FUNCTION_URL } from './config.js';
+import { FUNCTION_URL, GOOGLE_RESERVE_URL } from './config.js?v=reserve1';
+import { createReserveClient } from './reserve.js?v=reserve1';
 
 // На своём компьютере (node server.js) посредник работает по адресу /api.
 const ENDPOINT = ['localhost', '127.0.0.1'].includes(location.hostname) && !location.search.includes('api=cloud') ? '/api' : FUNCTION_URL;
 
 let accessKey = '';
-export const setKey = k => { accessKey = k; };
+let reserveMode = false;
+const reserve = GOOGLE_RESERVE_URL ? createReserveClient({endpoint: GOOGLE_RESERVE_URL}) : null;
+const reserveUrls = new Map();
+export const storageState = () => ({reserve: reserveMode, available: !!reserve});
+export const setKey = k => {
+  if (accessKey !== k) {
+    for (const url of reserveUrls.values()) URL.revokeObjectURL(url);
+    reserveUrls.clear(); reserveMode = false;
+  }
+  accessKey = k;
+};
 
 // Чтение можно спокойно повторить, если сервер на секунду не ответил.
 const SAFE_TO_RETRY = new Set(['library', 'url']);
 
 export async function call(action, params = {}) {
+  if (reserveMode && !SAFE_TO_RETRY.has(action)) {
+    throw new Error('Открыта резервная копия. Изменения пока недоступны; обновите страницу, когда Яндекс заработает.');
+  }
   for (let attempt = 1; ; attempt++) {
     try {
-      return await callOnce(action, params);
+      const result = await callOnce(action, params);
+      if (action === 'library') reserveMode = false;
+      return result;
     } catch (e) {
       const transient = !e.status || e.status >= 500;
+      if (reserve && action === 'library' && transient) {
+        const result = await reserve.call('library', {}, accessKey);
+        reserveMode = true;
+        return result;
+      }
       if (!SAFE_TO_RETRY.has(action) || !transient || attempt >= 3) throw e;
       await new Promise(r => setTimeout(r, 700 * attempt));
     }
@@ -30,11 +51,14 @@ async function callOnce(action, params) {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ action, key: accessKey, ...params }),
+      signal: AbortSignal.timeout(10000),
     });
   } catch {
     throw new Error('Нет связи с сервером. Проверьте интернет и попробуйте ещё раз.');
   }
-  const data = await r.json().catch(() => ({}));
+  const data = await r.json().catch(() => {
+    const error = new Error('Сервер вернул неверный ответ'); error.status = 502; throw error;
+  });
   if (!r.ok) {
     const err = new Error(data.error || `Ошибка сервера (${r.status})`);
     err.status = r.status;
@@ -43,14 +67,41 @@ async function callOnce(action, params) {
   return data;
 }
 
-export async function fileUrl(folder, name) {
-  return (await call('url', { folder, name })).href;
+export async function reserveFileUrl(folder, name, options = {}) {
+  if (!reserve) throw new Error('Резервный сервис ещё не подключён');
+  const key = accessKey, id = JSON.stringify([key, folder, name]);
+  if (reserveUrls.has(id)) return reserveUrls.get(id);
+  const blob = await reserve.file(folder, name, key, options);
+  if (accessKey !== key) throw new DOMException('Aborted', 'AbortError');
+  const url = URL.createObjectURL(blob);
+  reserveUrls.set(id, url);
+  while (reserveUrls.size > 2) {
+    const first = reserveUrls.keys().next().value;
+    URL.revokeObjectURL(reserveUrls.get(first)); reserveUrls.delete(first);
+  }
+  return url;
+}
+
+export async function fileUrl(folder, name, options = {}) {
+  if (reserveMode) return reserveFileUrl(folder, name, options);
+  try { return (await call('url', { folder, name })).href; }
+  catch (error) {
+    if (reserve && (!error.status || error.status >= 500)) return reserveFileUrl(folder, name, options);
+    throw error;
+  }
 }
 
 export async function fileText(folder, name) {
-  const r = await fetch(await fileUrl(folder, name));
-  if (!r.ok) throw new Error(`Не удалось загрузить текст (${r.status})`);
-  return r.text();
+  try {
+    const r = await fetch(await fileUrl(folder, name), {signal: AbortSignal.timeout(15000)});
+    if (!r.ok) {
+      const error = new Error(`Не удалось загрузить текст (${r.status})`); error.status = r.status; throw error;
+    }
+    return await r.text();
+  } catch (error) {
+    if (reserve && (!error.status || error.status >= 500)) return (await reserve.file(folder, name, accessKey)).text();
+    throw error;
+  }
 }
 
 // Загрузка файла прямо на Диск, с прогрессом (0…1).

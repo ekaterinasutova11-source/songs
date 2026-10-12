@@ -1,6 +1,6 @@
-import { call, setKey, fileUrl, fileText, uploadFile } from './api.js';
+import { call, setKey, fileUrl, fileText, uploadFile, reserveFileUrl, storageState } from './api.js?v=reserve1';
 import { groupSongs, variantName, songKey, buildFileName, retitleFileName, parseFileName, AUDIO_EXT } from './parse.js';
-import { NEW_DAYS, NEW_SINCE } from './config.js';
+import { NEW_DAYS, NEW_SINCE } from './config.js?v=reserve1';
 import { renderLyrics, editorToMarkup, COLORS } from './lyrics.js';
 import { Metronome, StandaloneMetronome, DRUM_PATTERNS, fitTaps } from './metronome.js?v=beats3';
 import { detectTempo, TEMPO_VERSION } from './tempo.js?v=metro3';
@@ -44,6 +44,8 @@ function localSet(k, v) { try { localStorage.setItem(k, v); } catch { /* при�
 // ---------- Уведомления ----------
 const toastBox = h('div', { class: 'toasts', role: 'status', 'aria-live': 'polite' });
 document.body.append(toastBox);
+const reserveNotice = h('aside', {class: 'reserve-notice', role: 'status', hidden: true});
+document.body.prepend(reserveNotice);
 function toast(text, kind = '') {
   const t = h('div', { class: `toast ${kind}` }, text);
   toastBox.append(t);
@@ -84,6 +86,12 @@ async function ensureLibrary(key, force) {
   if (library && libraryKey === key && !force) return;
   setKey(key);
   const data = await call('library');
+  reserveNotice.hidden = !data.reserve;
+  if (data.reserve) {
+    const date = data.reserve.capturedAt ? new Date(data.reserve.capturedAt).toLocaleDateString('ru-RU') : '';
+    reserveNotice.textContent = `Открыта резервная копия${date ? ' от ' + date : ''}. Можно слушать песни и заниматься. Изменения временно недоступны.`;
+    if (data.students.some(s => s.metadataUnavailable)) reserveNotice.textContent += ' Часть текстов, переводов и заметок ещё предстоит восстановить.';
+  }
   role = data.role;
   libraryKey = key;
   library = data.students
@@ -102,7 +110,7 @@ function showState(...children) {
 async function route(force = false, quiet = false) {
   const hash = location.hash.replace(/^#\/?/, '');
   const m = hash.match(/^([ts])\/([\w-]{8,})(?:\/s\/(.+))?$/);
-  if (!m) { standalone.setVisible(false); return hash ? renderOldLink() : renderLanding(); }
+  if (!m) { reserveNotice.hidden = true; standalone.setVisible(false); return hash ? renderOldLink() : renderLanding(); }
   const [, mode, key, folder] = m;
   if (mode !== 't' || libraryKey !== key) standalone.setVisible(false);
   if (!quiet || !library) showState(h('div', { class: 'spinner' }), 'Загружаю песни…');
@@ -732,6 +740,7 @@ const player = (() => {
     loopBtn = $('.p-loop'), speed = $('.p-speed'), dl = $('.p-dl'), impulseEl = $('.p-impulse');
   let current = null;
   let token = 0;
+  let playbackController = null;
   let wavePeaks = null, waveController = null;
   const waveStatus = $('.waveform-status');
   const progress = () => audio.duration ? audio.currentTime / audio.duration : 0;
@@ -792,12 +801,43 @@ const player = (() => {
     bar.classList.remove('busy');
   }
 
+  async function tryReserve() {
+    if (!storageState().available || !current || current.url?.startsWith('blob:')) return false;
+    if (current.recovery) return current.recovery;
+    if (current.reserveTried) return false;
+    current.reserveTried = true;
+    const my = token, selected = current;
+    const position = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
+    const rate = audio.playbackRate;
+    audio.pause(); cancelWave(); cancelTempo();
+    bar.classList.add('busy'); sub.textContent = 'Загружаю запись из резервной копии…';
+    selected.recovery = (async () => {
+      const url = await reserveFileUrl(selected.student.id, selected.v.file.name, {
+        signal: playbackController?.signal,
+        onProgress: value => { if (my === token) sub.textContent = `Загружаю резервную запись · ${Math.round(value * 100)}%`; }
+      });
+      if (my !== token || current !== selected) return true;
+      selected.url = url; audio.src = url; audio.playbackRate = rate;
+      if (position) audio.addEventListener('loadedmetadata', () => {
+        if (my === token) audio.currentTime = Math.min(position, audio.duration || position);
+      }, {once: true});
+      dl.href = url; prepareWave(selected);
+      if (metro.on) loadTempo();
+      sub.textContent = variantName(selected.v) + ' · резервная копия';
+      await audio.play();
+      if (my === token) bar.classList.remove('busy');
+      return true;
+    })();
+    return selected.recovery;
+  }
+
   async function play(song, v, student) {
     const id = `${student.id}|${v.file.name}`;
     if (current && current.id === id) {
       return audio.paused ? audio.play() : audio.pause();
     }
     const my = ++token;
+    playbackController?.abort(); playbackController = new AbortController();
     cancelWave();
     cancelTempo();
     cancelTaps();
@@ -814,8 +854,12 @@ const player = (() => {
     bar.classList.add('busy');
     markActive();
     try {
-      const url = await fileUrl(student.id, v.file.name);
+      const url = await fileUrl(student.id, v.file.name, {
+        signal: playbackController.signal,
+        onProgress: value => { if (my === token) sub.textContent = `Загружаю резервную запись · ${Math.round(value * 100)}%`; }
+      });
       if (my !== token) return;
+      sub.textContent = variantName(v) + (url.startsWith('blob:') ? ' · резервная копия' : '');
       current.url = url;
       prepareWave(current);
       const wasRate = audio.playbackRate;
@@ -828,7 +872,10 @@ const player = (() => {
       }
       await audio.play();
     } catch (e) {
-      if (my === token && e.name !== 'AbortError') failed('Не удалось запустить: ' + e.message);
+      if (my === token && e.name !== 'AbortError') {
+        try { if (!(await tryReserve()) && my === token) failed('Не удалось запустить: ' + e.message); }
+        catch (error) { if (my === token) failed('Не удалось открыть резерв: ' + error.message); }
+      }
     } finally {
       if (my === token) bar.classList.remove('busy');
     }
@@ -995,6 +1042,7 @@ const player = (() => {
   });
   speed.addEventListener('change', () => { audio.playbackRate = Number(speed.value); });
   $('.p-close').addEventListener('click', () => {
+    playbackController?.abort();
     audio.pause();
     token++;
     cancelWave();
@@ -1033,10 +1081,26 @@ const player = (() => {
   audio.addEventListener('play', () => { playBtn.classList.add('playing'); playBtn.setAttribute('aria-label', 'Пауза'); });
   audio.addEventListener('pause', () => { playBtn.classList.remove('playing'); playBtn.setAttribute('aria-label', 'Играть'); });
   audio.addEventListener('error', () => {
-    if (current) failed('Не играет. Если сайт открыт в DuckDuckGo — попробуйте Chrome или Яндекс Браузер.');
+    const my = token;
+    if (current) tryReserve().then(recovered => {
+      if (!recovered && my === token) failed('Не удалось загрузить запись. Попробуйте ещё раз.');
+    }).catch(error => { if (my === token) failed('Не удалось открыть резерв: ' + error.message); });
   });
-  audio.addEventListener('waiting', () => bar.classList.add('busy'));
-  audio.addEventListener('playing', () => bar.classList.remove('busy'));
+  let stallTimer;
+  const cancelStall = () => clearTimeout(stallTimer);
+  audio.addEventListener('waiting', () => {
+    bar.classList.add('busy'); cancelStall();
+    if (storageState().available) {
+      const my = token;
+      stallTimer = setTimeout(() => {
+        if (my === token && !audio.paused) tryReserve().catch(error => {
+          if (my === token) failed('Не удалось открыть резерв: ' + error.message);
+        });
+      }, 15000);
+    }
+  });
+  audio.addEventListener('pause', cancelStall);
+  audio.addEventListener('playing', () => { cancelStall(); bar.classList.remove('busy'); });
 
   // Пробел — пауза/продолжить, если не печатаем в поле.
   document.addEventListener('keydown', e => {
