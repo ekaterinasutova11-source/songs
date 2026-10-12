@@ -1,6 +1,6 @@
 import { call, setKey, fileUrl, fileText, uploadFile, reserveFileUrl, storageState } from './api.js?v=reserve1';
 import { groupSongs, variantName, songKey, buildFileName, retitleFileName, parseFileName, AUDIO_EXT } from './parse.js';
-import { NEW_DAYS, NEW_SINCE } from './config.js?v=reserve1';
+import { NEW_DAYS, NEW_SINCE } from './config.js?v=fresh2';
 import { renderLyrics, editorToMarkup, COLORS } from './lyrics.js';
 import { Metronome, StandaloneMetronome, DRUM_PATTERNS, fitTaps } from './metronome.js?v=beats3';
 import { detectTempo, TEMPO_VERSION } from './tempo.js?v=metro3';
