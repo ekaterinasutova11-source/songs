@@ -2,9 +2,10 @@ import { call, setKey, fileUrl, fileText, uploadFile, reserveFileUrl, storageSta
 import { groupSongs, variantName, songKey, buildFileName, retitleFileName, parseFileName, AUDIO_EXT } from './parse.js';
 import { NEW_DAYS, NEW_SINCE } from './config.js?v=fresh2';
 import { renderLyrics, editorToMarkup, COLORS } from './lyrics.js';
-import { Metronome, StandaloneMetronome, DRUM_PATTERNS, fitTaps } from './metronome.js?v=beats3';
+import { Metronome, StandaloneMetronome, DRUM_PATTERNS, fitTaps } from './metronome.js?v=mobile1';
 import { detectTempo, TEMPO_VERSION } from './tempo.js?v=metro3';
 import { loadWaveform, drawWaveform } from './waveform.js?v=garden1';
+import { attachMediaControls, playbackSession, primeAudio } from './media.js?v=mobile1';
 
 const main = document.getElementById('main');
 let role = null;         // 'teacher' | 'student'
@@ -40,6 +41,15 @@ const extOf = name => (name.match(/\.[^.]+$/) || ['.mp3'])[0].toLowerCase();
 
 function localGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function localSet(k, v) { try { localStorage.setItem(k, v); } catch { /* приватный режим */ } }
+const lyricFonts = {modern: 'Современный', book: 'Книжный', clear: 'Чёткий', spacious: 'Просторный'};
+const selectedLyricFont = () => Object.hasOwn(lyricFonts, localGet('songs:lyrics-font')) ? localGet('songs:lyrics-font') : 'modern';
+document.documentElement.dataset.lyricsFont = selectedLyricFont();
+document.addEventListener('change', event => {
+  if (!event.target.matches('.lyrics-font') || !Object.hasOwn(lyricFonts, event.target.value)) return;
+  const font = event.target.value;
+  document.documentElement.dataset.lyricsFont = font; localSet('songs:lyrics-font', font);
+  document.querySelectorAll('.lyrics-font').forEach(select => {select.value = font;});
+});
 
 // ---------- Уведомления ----------
 const toastBox = h('div', { class: 'toasts', role: 'status', 'aria-live': 'polite' });
@@ -254,7 +264,7 @@ function renderStudent(student) {
   const teacherTools = isTeacher && h('div', { class: 'teacher-tools' },
     h('a', { class: 'btn ghost small', href: `#/t/${libraryKey}` }, '← Все ученики'),
     (() => {
-      const b = h('button', { class: 'btn small', onclick: () => copyText(studentLink(student), b) }, 'Скопировать ссылку ученика');
+      const b = h('button', { class: 'btn small', onclick: () => copyText(studentLink(student), b) }, /ансамбль/i.test(student.name) ? 'Скопировать ссылку ансамбля' : 'Скопировать ссылку ученика');
       return b;
     })(),
     h('details', { class: 'more' },
@@ -282,6 +292,7 @@ function renderStudent(student) {
 
   main.replaceChildren(...[
     teacherTools,
+    isTeacher && /ансамбль/i.test(student.name) && h('p', {class: 'muted ensemble-hint'}, 'Одна ссылка для всех участников ансамбля. Можно открывать одновременно на разных устройствах.'),
     h('header', { class: 'page-head' },
       h('div', {},
         h('p', { class: 'eyebrow' }, isTeacher ? 'Репертуар ученика' : 'Моя музыка'),
@@ -299,6 +310,9 @@ function renderStudent(student) {
 // ---------- Карточка песни ----------
 function songReading(song, student) {
   const panel = h('section', { class: 'reading', hidden: true, 'aria-label': `Слова песни ${song.title}` });
+  panel.append(h('label', {class: 'reading-appearance'}, 'Шрифт текста',
+    h('select', {class: 'lyrics-font', 'aria-label': `Шрифт текста: ${song.title}`, value: selectedLyricFont()},
+      Object.entries(lyricFonts).map(([value, name]) => h('option', {value, selected: value === selectedLyricFont()}, name)))));
   const controls = h('div', { class: 'reading-modes', role: 'group', 'aria-label': `Текст и перевод: ${song.title}` });
   let mode = 'closed';
   const panes = {};
@@ -731,8 +745,10 @@ function addSongForm(student, close) {
 // ---------- Плеер ----------
 const player = (() => {
   const audio = new Audio();
-  audio.crossOrigin = 'anonymous'; // чтобы музыку можно было пустить через тот же звуковой путь, что и метроном
   audio.preload = 'auto';
+  audio.id = 'song-audio'; audio.setAttribute('playsinline', ''); audio.hidden = true;
+  document.body.append(audio);
+  playbackSession();
   const bar = document.getElementById('player');
   const $ = sel => bar.querySelector(sel);
   const title = $('.p-title'), sub = $('.p-sub'), playBtn = $('.p-play'),
@@ -800,6 +816,29 @@ const player = (() => {
     playBtn.classList.remove('playing');
     bar.classList.remove('busy');
   }
+  async function startAudio() {
+    playbackSession();
+    try {
+      await audio.play();
+      if (current?.url) sub.textContent = variantName(current.v) + (current.url.startsWith('blob:') ? ' · резервная копия' : '');
+      return true;
+    }
+    catch (error) {
+      if (error.name !== 'NotAllowedError') throw error;
+      failed('Запись готова. Нажмите ▶, чтобы начать.');
+      playBtn.setAttribute('aria-label', 'Играть');
+      return false;
+    }
+  }
+  const toggleAudio = () => {
+    if (!current?.url) return;
+    if (!audio.paused) audio.pause();
+    else startAudio().catch(error => failed('Не удалось продолжить запись: ' + error.message));
+  };
+  attachMediaControls(audio, {
+    play: () => {if (current?.url) startAudio().catch(() => failed('Нажмите ▶, чтобы продолжить.'));},
+    stop: () => {audio.pause(); audio.currentTime = 0;}
+  });
 
   async function tryReserve() {
     if (!storageState().available || !current || current.url?.startsWith('blob:')) return false;
@@ -824,7 +863,7 @@ const player = (() => {
       dl.href = url; prepareWave(selected);
       if (metro.on) loadTempo();
       sub.textContent = variantName(selected.v) + ' · резервная копия';
-      await audio.play();
+      await startAudio();
       if (my === token) bar.classList.remove('busy');
       return true;
     })();
@@ -834,7 +873,7 @@ const player = (() => {
   async function play(song, v, student) {
     const id = `${student.id}|${v.file.name}`;
     if (current && current.id === id) {
-      return audio.paused ? audio.play() : audio.pause();
+      return toggleAudio();
     }
     const my = ++token;
     playbackController?.abort(); playbackController = new AbortController();
@@ -842,6 +881,7 @@ const player = (() => {
     cancelTempo();
     cancelTaps();
     audio.pause();
+    playbackSession(); primeAudio(audio);
     metro.setGrid(0, 0);
     current = { id, song, v, student, url: null };
     bar.hidden = false;
@@ -870,7 +910,7 @@ const player = (() => {
       if ('mediaSession' in navigator) {
         navigator.mediaSession.metadata = new MediaMetadata({ title: song.title, artist: variantName(v) });
       }
-      await audio.play();
+      await startAudio();
     } catch (e) {
       if (my === token && e.name !== 'AbortError') {
         try { if (!(await tryReserve()) && my === token) failed('Не удалось запустить: ' + e.message); }
@@ -1033,7 +1073,7 @@ const player = (() => {
   metro.onBeat = () => { mDot.classList.remove('beat'); void mDot.offsetWidth; mDot.classList.add('beat'); };
   audio.addEventListener('ratechange', () => showBpm());
 
-  playBtn.addEventListener('click', () => (audio.paused ? audio.play() : audio.pause()));
+  playBtn.addEventListener('click', toggleAudio);
   $('.p-back').addEventListener('click', () => { audio.currentTime = Math.max(0, audio.currentTime - 5); });
   $('.p-fwd').addEventListener('click', () => { audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + 5); });
   loopBtn.addEventListener('click', () => {
@@ -1106,7 +1146,7 @@ const player = (() => {
   document.addEventListener('keydown', e => {
     if (e.code !== 'Space' || !current || e.target.closest('input, select, textarea, button, summary')) return;
     e.preventDefault();
-    audio.paused ? audio.play() : audio.pause();
+    toggleAudio();
   });
 
   // После перерисовки страницы подсветить играющий вариант.

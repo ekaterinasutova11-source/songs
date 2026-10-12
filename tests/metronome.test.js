@@ -103,6 +103,18 @@ test('speed scales scheduled timing; no duplicate beats', () => {
 test('no click while audio is buffering', () => {
   const { m, audio, nodes } = setup(); audio.readyState = 2; m.schedule(); assert.equal(nodes.length, 0);
 });
+
+test('starting the song metronome leaves music on native audio for background playback', () => {
+  const oldWindow = globalThis.window;
+  let routed = false;
+  const audio = {addEventListener() {}};
+  const ctx = {destination: {}, resume() {}, createGain: () => ({gain: {}, connect() {}}),
+    createMediaElementSource() {routed = true; return {connect() {}};}};
+  globalThis.window = {AudioContext: function() {return ctx;}};
+  const metro = new Metronome(audio);
+  try {metro.start(); assert.equal(routed, false); assert.equal(metro.source, null);}
+  finally {metro.stop(); globalThis.window = oldWindow;}
+});
 test('loop wrap resumes clicking at the beginning of the song', () => {
   const { m, audio, nodes } = setup();
   audio.currentTime = 19; m.schedule();

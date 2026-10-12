@@ -4,8 +4,8 @@
 // Доли берутся либо из списка (найдены по записи и «дышат» вместе с музыкой),
 // либо из ровной сетки (темп + сдвиг) — например, если темп настучали вручную.
 //
-// Музыка и щелчки идут через один AudioContext, поэтому у них одинаковая задержка
-// вывода (важно для Bluetooth-наушников, где она бывает 0,1–0,3 с).
+// Музыка остаётся на родном аудиоплеере браузера: при сворачивании приложения
+// её воспроизведение не зависит от работы AudioContext метронома.
 
 export class Metronome {
   constructor(audio) {
@@ -117,11 +117,8 @@ export class Metronome {
       this.gain = this.ctx.createGain();
       this.gain.gain.value = this.volume;
       this.gain.connect(this.ctx.destination);
-      // Пускаем музыку через тот же AudioContext (нужен crossOrigin у <audio>).
-      if (this.audio) try {
-        this.source = this.ctx.createMediaElementSource(this.audio);
-        this.source.connect(this.ctx.destination);
-      } catch { /* уже подключено или браузер не умеет — щелчки всё равно будут */ }
+      // Never route the music through this context: mobile browsers may suspend
+      // Web Audio in the background even while native media can keep playing.
     }
     this.ctx.resume();
     this.on = true;
