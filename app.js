@@ -96,11 +96,13 @@ async function ensureLibrary(key, force) {
   if (library && libraryKey === key && !force) return;
   setKey(key);
   const data = await call('library');
-  reserveNotice.hidden = !data.reserve;
+  reserveNotice.hidden = !data.reserve && !data.students.some(s => s.metadataUnavailable);
   if (data.reserve) {
     const date = data.reserve.capturedAt ? new Date(data.reserve.capturedAt).toLocaleDateString('ru-RU') : '';
     reserveNotice.textContent = `Открыта резервная копия${date ? ' от ' + date : ''}. Можно слушать песни и заниматься. Изменения временно недоступны.`;
     if (data.students.some(s => s.metadataUnavailable)) reserveNotice.textContent += ' Прежние переводы, заметки и настройки одной из страниц ещё предстоит восстановить.';
+  } else if (data.students.some(s => s.metadataUnavailable)) {
+    reserveNotice.textContent = 'Песни доступны. Яндекс временно не отдал переводы и заметки одной из страниц. Обновите страницу позже; прежние данные сохранены на диске.';
   }
   role = data.role;
   libraryKey = key;

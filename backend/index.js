@@ -30,18 +30,19 @@ async function fetchRetry(url, opts, tries = 3) {
       const r = await fetch(url, opts);
       if (r.status < 500 || i >= tries) return r;
     } catch (e) {
+      if (opts?.signal?.aborted) throw e;
       if (i >= tries) throw e;
     }
     await new Promise(res => setTimeout(res, 300 * i));
   }
 }
 
-async function disk(method, path, params = {}, { okStatuses = [] } = {}) {
+async function disk(method, path, params = {}, { okStatuses = [], signal } = {}) {
   const qs = new URLSearchParams(params).toString();
   // Повторять можно только то, что безопасно выполнить дважды.
   const tries = method === 'GET' ? 3 : 1;
   const r = await fetchRetry(`${API}${path}${qs ? '?' + qs : ''}`, {
-    method, headers: { Authorization: 'OAuth ' + DISK_TOKEN },
+    method, headers: { Authorization: 'OAuth ' + DISK_TOKEN }, signal,
   }, tries);
   if (r.status === 204) return null;
   const body = await r.json().catch(() => ({}));
@@ -79,10 +80,10 @@ async function directUrl(href) {
   }
 }
 
-async function readJson(path) {
+async function readJson(path, signal) {
   try {
-    const { href } = await disk('GET', '/resources/download', { path });
-    const r = await fetchRetry(href);
+    const { href } = await disk('GET', '/resources/download', { path }, {signal});
+    const r = await fetchRetry(href, {signal});
     if (!r.ok) throw new HttpError(502, `Не удалось прочитать настройки (${r.status})`);
     return await r.json();
   } catch (e) {
@@ -180,8 +181,19 @@ async function folderFiles(folder) {
 
 async function folderData(folder) {
   const files = await folderFiles(folder);
-  const meta = files.some(f => f.name === META_NAME) ? await readMeta(folder) : { songs: {} };
-  return { files: files.filter(f => f.name !== META_NAME), meta: meta.songs || {} };
+  let meta = {songs: {}}, metadataUnavailable = false;
+  if (files.some(f => f.name === META_NAME)) {
+    try {
+      // Optional song notes must not hold up the whole teacher library.
+      // This fallback is read-only; mutations still use strict readMeta.
+      meta = (await readJson(`${folder.path}/${META_NAME}`, AbortSignal.timeout(6000))) || meta;
+      if (!meta || typeof meta !== 'object' || Array.isArray(meta)) throw new Error('Invalid metadata');
+    } catch {
+      meta = {songs: {}}; metadataUnavailable = true;
+    }
+  }
+  return { files: files.filter(f => f.name !== META_NAME), meta: meta.songs || {},
+    ...(metadataUnavailable ? {metadataUnavailable: true} : {}) };
 }
 
 async function handle(req) {
