@@ -24,7 +24,17 @@ function catalogue_() {
   const info = Drive.Files.get(archive.getId(), {fields: 'size,md5Checksum'});
   if (Number(info.size) !== index.archive.size || info.md5Checksum !== index.archive.md5)
     reserveError_(503, 'Архив не совпадает с проверенной копией');
-  return {index: index, archiveId: archive.getId()};
+  const archives = {};
+  archives[index.archive.name] = {id: archive.getId(), size: index.archive.size};
+  for (const extra of index.extraArchives || []) {
+    if (archives[extra.name]) reserveError_(503, 'Повторяющийся архив дополнений');
+    const file = uniqueFile_(folder, extra.name);
+    const details = Drive.Files.get(file.getId(), {fields: 'size,md5Checksum'});
+    if (Number(details.size) !== extra.size || details.md5Checksum !== extra.md5)
+      reserveError_(503, 'Дополнения не совпадают с проверенной копией');
+    archives[extra.name] = {id: file.getId(), size: extra.size};
+  }
+  return {index: index, archiveId: archive.getId(), archives: archives};
 }
 function sha256_(value) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(value), Utilities.Charset.UTF_8)
@@ -65,19 +75,22 @@ function handleReserve_(req) {
   const file = student.files.find(function(f) {return f.name === req.name;});
   if (!file) reserveError_(404, 'Файл пока отсутствует в резервной копии');
   if (req.action === 'fileInfo') return {size: file.size, sha256: file.sha256, chunkSize: CHUNK_SIZE};
+  const source = catalogue.archives[file.archive || index.archive.name];
+  if (!source || !Number.isSafeInteger(file.offset) || file.offset < 0 || file.offset + file.size > source.size)
+    reserveError_(503, 'Неверное расположение файла в резерве');
   const start = req.start, length = req.length;
   if (!Number.isSafeInteger(start) || start < 0 || !Number.isSafeInteger(length) || length < 1
       || length > CHUNK_SIZE || start + length > file.size) reserveError_(400, 'Неверный диапазон файла');
   const first = file.offset + start, last = first + length - 1;
   const response = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/'
-    + encodeURIComponent(catalogue.archiveId) + '?alt=media', {
+    + encodeURIComponent(source.id) + '?alt=media', {
       headers: {Authorization: 'Bearer ' + ScriptApp.getOAuthToken(), Range: 'bytes=' + first + '-' + last},
       muteHttpExceptions: true
     });
   const headers = response.getAllHeaders();
   const rangeName = Object.keys(headers).find(function(k) {return k.toLowerCase() === 'content-range';});
   if (response.getResponseCode() !== 206 || !rangeName
-      || String(headers[rangeName]) !== 'bytes ' + first + '-' + last + '/' + index.archive.size)
+      || String(headers[rangeName]) !== 'bytes ' + first + '-' + last + '/' + source.size)
     reserveError_(502, 'Google не отдал запрошенный фрагмент');
   const bytes = response.getBlob().getBytes();
   if (bytes.length !== length) reserveError_(502, 'Фрагмент файла получен не полностью');

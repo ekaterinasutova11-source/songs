@@ -13,12 +13,20 @@ The public web-app endpoint uses POST-body access keys and preserves the
 original pupil IDs. Only the teacher sees pupil keys. Pupils see only their own
 library. OAuth tokens, ZIP offsets, raw access settings, and other pupils' files
 are never returned to pupils. Reads are confined to the configured private
-reserve folder and the named ZIP. The ZIP size and MD5 must match the index
+reserve folder and the named ZIP archives. Each ZIP size and MD5 must match the index
 before any access; each reconstructed file must also match its original SHA-256.
 
 Missing texts are omitted from the snapshot's song files. Missing pupil
 metadata is explicitly marked unavailable and is never written as an empty
 replacement onto Yandex. All mutation actions fail on this service.
+
+Optional `extraArchives` hold later recovered files without replacing the
+original archive. A file's `archive` selects its verified supplement; files
+without that field still use the original archive. Deploy support for this
+field before replacing the private index, and keep earlier index versions.
+On 13 October 2026, eight replacement texts were added in a supplement. The
+unreadable original metadata for one pupil remains marked unavailable; its
+new primary metadata was created separately after preserving the original.
 
 ## Activation gate
 

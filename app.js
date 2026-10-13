@@ -100,7 +100,7 @@ async function ensureLibrary(key, force) {
   if (data.reserve) {
     const date = data.reserve.capturedAt ? new Date(data.reserve.capturedAt).toLocaleDateString('ru-RU') : '';
     reserveNotice.textContent = `Открыта резервная копия${date ? ' от ' + date : ''}. Можно слушать песни и заниматься. Изменения временно недоступны.`;
-    if (data.students.some(s => s.metadataUnavailable)) reserveNotice.textContent += ' Часть текстов, переводов и заметок ещё предстоит восстановить.';
+    if (data.students.some(s => s.metadataUnavailable)) reserveNotice.textContent += ' Прежние переводы, заметки и настройки одной из страниц ещё предстоит восстановить.';
   }
   role = data.role;
   libraryKey = key;
