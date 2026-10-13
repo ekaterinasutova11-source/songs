@@ -55,13 +55,13 @@ async function disk(method, path, params = {}, { okStatuses = [], signal } = {})
   return { status: r.status, ...body };
 }
 
-async function list(path) {
+async function list(path, signal = AbortSignal.timeout(8000)) {
   const items = [];
   for (let offset = 0; ; offset += 1000) {
     const page = (await disk('GET', '/resources', {
       path, limit: 1000, offset,
       fields: '_embedded.items.name,_embedded.items.path,_embedded.items.type,_embedded.items.modified,_embedded.items.size,_embedded.items.resource_id,_embedded.total',
-    }))._embedded;
+    }, {signal}))._embedded;
     items.push(...page.items);
     if (items.length >= page.total || !page.items.length) return items;
   }
@@ -114,7 +114,7 @@ async function waitOperation(res) {
 const newKey = () => crypto.randomBytes(9).toString('base64url');
 
 async function loadState() {
-  const [settings, rootItems] = await Promise.all([readJson(SETTINGS), list(ROOT)]);
+  const [settings, rootItems] = await Promise.all([readJson(SETTINGS, AbortSignal.timeout(8000)), list(ROOT)]);
   const s = settings || { students: {} };
   const folders = rootItems.filter(i => i.type === 'dir');
   let changed = !settings;

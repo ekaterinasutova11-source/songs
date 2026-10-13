@@ -31,3 +31,24 @@ test('unreadable pupil metadata cannot hide songs or overwrite existing notes', 
     assert.equal(denied.statusCode,403);
   }finally{globalThis.fetch=previous;}
 });
+
+test('stalled access settings fail within the read deadline without writing replacement settings', async()=>{
+  const previous=globalThis.fetch, previousTimeout=AbortSignal.timeout, previousError=console.error;
+  const budgets=[];
+  let writes=0;
+  AbortSignal.timeout=ms=>{budgets.push(ms);return previousTimeout(30);};
+  console.error=()=>{};
+  globalThis.fetch=async(input,opts={})=>{
+    const url=new URL(input);
+    if(opts.method==='PUT' || url.pathname.endsWith('/upload'))writes++;
+    if(url.pathname.endsWith('/download'))return new Promise((resolve,reject)=>{
+      opts.signal.addEventListener('abort',()=>reject(opts.signal.reason),{once:true});
+    });
+    return Response.json({_embedded:{total:0,items:[]}});
+  };
+  try{
+    const result=await handler({httpMethod:'POST',body:JSON.stringify({action:'library',key:'test-teacher'})});
+    assert.equal(result.statusCode,500);assert.equal(writes,0);
+    assert.deepEqual(budgets,[8000,8000]);
+  }finally{globalThis.fetch=previous;AbortSignal.timeout=previousTimeout;console.error=previousError;}
+});
