@@ -12,6 +12,20 @@ async function api() {
   return import('data:text/javascript;base64,' + Buffer.from(source + `\n// instance ${sequence++}`).toString('base64'));
 }
 const response = (status, body) => ({ok: status < 400, status, json: async () => body});
+
+test('cold library has time to finish while file requests keep a shorter timeout', async () => {
+  const oldFetch = globalThis.fetch, oldLocation = globalThis.location, oldTimeout = AbortSignal.timeout;
+  const budgets = [];
+  globalThis.location = {hostname:'production.invalid', search:''};
+  AbortSignal.timeout = ms => {budgets.push(ms); return new AbortController().signal;};
+  globalThis.fetch = async () => response(200, {});
+  try {
+    const client = await api(); client.setKey('test-key');
+    await client.call('library'); await client.call('url');
+    assert.deepEqual(budgets, [25000, 10000]);
+    assert.equal(client.storageState().reserve, false);
+  } finally {globalThis.fetch = oldFetch; globalThis.location = oldLocation; AbortSignal.timeout = oldTimeout;}
+});
 test('server outage falls back to Google; writes stay blocked until a fresh primary library loads', async () => {
   const oldFetch = globalThis.fetch, oldLocation = globalThis.location;
   let restored = false, googleCalls = 0, writes = 0;

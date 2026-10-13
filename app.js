@@ -1,4 +1,4 @@
-import { call, setKey, fileUrl, fileText, uploadFile, reserveFileUrl, storageState } from './api.js?v=reserve1';
+import { call, setKey, fileUrl, fileText, uploadFile, reserveFileUrl, storageState } from './api.js?v=restore1';
 import { groupSongs, variantName, songKey, buildFileName, retitleFileName, parseFileName, AUDIO_EXT } from './parse.js';
 import { NEW_DAYS, NEW_SINCE } from './config.js?v=fresh2';
 import { renderLyrics, editorToMarkup, COLORS } from './lyrics.js';

@@ -51,7 +51,9 @@ async function callOnce(action, params) {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ action, key: accessKey, ...params }),
-      signal: AbortSignal.timeout(10000),
+      // A teacher's library reads metadata for every pupil; a cold cloud
+      // function can take longer than a single file-link request.
+      signal: AbortSignal.timeout(action === 'library' ? 25000 : 10000),
     });
   } catch {
     throw new Error('Нет связи с сервером. Проверьте интернет и попробуйте ещё раз.');
