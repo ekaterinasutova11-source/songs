@@ -320,13 +320,13 @@ function renderStudent(student) {
 // ---------- Карточка песни ----------
 function songListItem(song, student, owner = false) {
   const href = songPath(role, libraryKey, student.id, song.key);
-  return h('article', {class: 'song song-index-item', 'data-song-id': `${student.id}|${song.key}`},
+  return h('a', {class: 'song song-index-item', href, 'aria-label': `Открыть песню: ${song.title}`, 'data-song-id': `${student.id}|${song.key}`},
     h('div', {class: 'song-index-content'},
-      h('a', {class: 'song-index-title', href}, song.title),
+      h('span', {class: 'song-index-title'}, song.title),
       h('p', {class: 'muted'}, owner ? `${student.name} · ` : '',
         `${plural(song.variants.length, 'аудиозапись', 'аудиозаписи', 'аудиозаписей')}${song.lyrics ? ' · текст' : ''}`)),
     isNew(song.modified) ? h('span', {class: 'badge'}, 'новое') : null,
-    h('a', {class: 'btn small', href, 'aria-label': `Открыть песню: ${song.title}`}, 'Открыть'));
+    h('span', {class: 'btn small song-index-open', 'aria-hidden': 'true'}, 'Открыть ›'));
 }
 
 function renderSong(student, key) {
@@ -1217,9 +1217,9 @@ const standalone = (() => {
       h('div', { class: 'standalone-title' }, dot, h('strong', {}, 'Метроном'), h('span', { class: 'muted small' }, 'без песни')),
       h('div', { class: 'standalone-controls' },
         pattern,
-        h('button', { class: 'm-btn', type: 'button', 'aria-label': 'Уменьшить самостоятельный темп на 1', onclick: () => setTempo(Math.max(1, metro.bpm - 1)) }, '−'),
+        h('button', { class: 'm-btn standalone-decrease', type: 'button', 'aria-label': 'Уменьшить самостоятельный темп на 1', onclick: () => setTempo(Math.max(1, metro.bpm - 1)) }, '−'),
         h('label', { class: 'm-tempo' }, bpm, 'BPM'),
-        h('button', { class: 'm-btn', type: 'button', 'aria-label': 'Увеличить самостоятельный темп на 1', onclick: () => setTempo(Math.min(999, metro.bpm + 1)) }, '+'),
+        h('button', { class: 'm-btn standalone-increase', type: 'button', 'aria-label': 'Увеличить самостоятельный темп на 1', onclick: () => setTempo(Math.min(999, metro.bpm + 1)) }, '+'),
         toggle,
         h('input', { class: 'm-vol', type: 'range', min: 0, max: 1, step: 0.05, value: metro.volume, 'aria-label': 'Громкость самостоятельного метронома', oninput: e => {
           metro.setVolume(Number(e.target.value)); localSet('songs:standalone:volume', metro.volume);
