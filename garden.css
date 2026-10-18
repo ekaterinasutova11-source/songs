@@ -120,6 +120,21 @@ body.has-player .editor-footer, body.has-player:has(.player.with-metro) .editor-
 .song-wave .waveform-canvas { height: 48px; }
 .waveform-status { position: absolute; inset: 0; display: grid; place-items: center; font-size: 10px; color: var(--muted); pointer-events: none; }
 .waveform-status:empty { display: none; }
+.waveform-status { pointer-events: auto; width: 100%; border: 0; background: transparent; cursor: pointer; font: inherit; font-size: 11px; color: var(--muted); }
+.waveform-status:focus-visible { outline: 2px solid var(--accent); border-radius: 8px; }
+.song-index { grid-template-columns: 1fr; }
+.song-index-item { display: flex; align-items: center; gap: 16px; padding: 20px 24px; }
+.song-head h1 { font-size: 30px; margin: 0; }
+.song-index-content { flex: 1; min-width: 0; }
+.song-index-title { color: var(--text); font-size: 21px; font-family: inherit; text-decoration: none; overflow-wrap: anywhere; }
+.song-index-title:hover { color: var(--accent); }
+.song-index-content .muted { margin: 7px 0 0; font-size: 13px; }
+.song-index-item > .btn { flex-shrink: 0; }
+@media (max-width: 600px) {
+  .song-index-item { padding: 17px; gap: 10px; flex-wrap: wrap; }
+  .song-index-title { font-size: 19px; }
+  .song-index-content { min-width: 60%; }
+}
 .p-seek::-webkit-slider-runnable-track { height: 2px; }
 .p-seek::-webkit-slider-thumb { width: 10px; height: 10px; margin-top: -4px; }
 .p-metro { padding: 10px; border-radius: 12px; gap: 8px; }

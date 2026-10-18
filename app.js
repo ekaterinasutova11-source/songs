@@ -6,6 +6,8 @@ import { Metronome, StandaloneMetronome, DRUM_PATTERNS, fitTaps } from './metron
 import { detectTempo, TEMPO_VERSION } from './tempo.js?v=metro3';
 import { loadWaveform, drawWaveform } from './waveform.js?v=garden1';
 import { attachMediaControls, playbackSession, primeAudio } from './media.js?v=mobile1';
+import { parseRoute, studentPath, songPath } from './navigation.js?v=songpages1';
+import { attachProgress } from './player-progress.js?v=songpages1';
 
 const main = document.getElementById('main');
 let role = null;         // 'teacher' | 'student'
@@ -87,15 +89,18 @@ function withMeta(songs, meta = {}) {
 
 // Запись этих данных — по одной за раз, чтобы правки не затёрли друг друга.
 let metaQueue = Promise.resolve();
+let libraryRequest = 0, routeRequest = 0;
 function saveMeta(folder, song, extra) {
   const job = metaQueue.then(() => call('saveMeta', { folder, song, ...extra }));
   metaQueue = job.catch(() => {});
   return job;
 }
 async function ensureLibrary(key, force) {
+  const request = ++libraryRequest;
   if (library && libraryKey === key && !force) return;
   setKey(key);
   const data = await call('library');
+  if (request !== libraryRequest) return;
   reserveNotice.hidden = !data.reserve && !data.students.some(s => s.metadataUnavailable);
   if (data.reserve) {
     const date = data.reserve.capturedAt ? new Date(data.reserve.capturedAt).toLocaleDateString('ru-RU') : '';
@@ -120,15 +125,18 @@ function showState(...children) {
 // #/t/<ключ>/s/<папка>     — преподаватель на страничке ученика
 // #/s/<ключ>               — ученик
 async function route(force = false, quiet = false) {
+  const request = ++routeRequest;
   const hash = location.hash.replace(/^#\/?/, '');
-  const m = hash.match(/^([ts])\/([\w-]{8,})(?:\/s\/(.+))?$/);
+  const m = parseRoute(location.hash);
   if (!m) { reserveNotice.hidden = true; standalone.setVisible(false); return hash ? renderOldLink() : renderLanding(); }
-  const [, mode, key, folder] = m;
+  const {mode, key, folder, song} = m;
   if (mode !== 't' || libraryKey !== key) standalone.setVisible(false);
   if (!quiet || !library) showState(h('div', { class: 'spinner' }), 'Загружаю песни…');
   try {
     await ensureLibrary(key, force);
+    if (request !== routeRequest) return;
   } catch (e) {
+    if (request !== routeRequest) return;
     if (e.status === 403) standalone.setVisible(false);
     return showState(
       h('p', {}, e.status === 403 ? 'Эта ссылка не работает.' : 'Не получилось загрузить песни.'),
@@ -136,10 +144,10 @@ async function route(force = false, quiet = false) {
       e.status === 403 ? null : h('button', { class: 'btn', onclick: () => route(true) }, 'Попробовать снова'));
   }
   standalone.setVisible(role === 'teacher' && mode === 't');
-  if (role === 'student' || mode === 's') return renderStudent(library[0]);
+  if (role === 'student' || mode === 's') return song ? renderSong(library[0], song) : renderStudent(library[0]);
   if (folder) {
-    const s = library.find(x => x.id === decodeURIComponent(folder));
-    if (s) return renderStudent(s);
+    const s = library.find(x => x.id === folder);
+    if (s) return song ? renderSong(s, song) : renderStudent(s);
     if (!force) return route(true, quiet);   // может, ученика только что добавили
   }
   renderTeacher(key);
@@ -190,7 +198,7 @@ function renderTeacher(key) {
       for (const s of library) for (const song of s.songs)
         if (song.key.includes(q)) found.push({ s, song });
       results.replaceChildren(found.length
-        ? h('div', { class: 'songs' }, found.map(({ s, song }) => songCard(song, s, { owner: true })))
+        ? h('div', { class: 'songs song-index' }, found.map(({ s, song }) => songListItem(song, s, true)))
         : h('p', { class: 'muted' }, 'Ничего не нашлось.'));
     },
   });
@@ -234,7 +242,7 @@ let sortMode = localGet('sort') || 'name';
 function renderStudent(student) {
   document.title = `${student.name} — Песни`;
   const isTeacher = role === 'teacher';
-  const list = h('div', { class: 'songs' });
+  const list = h('div', { class: 'songs song-index', 'aria-label': 'Список песен' });
   const addBox = h('div', { class: 'add-song', hidden: true });
 
   const draw = () => {
@@ -244,7 +252,7 @@ function renderStudent(student) {
       ? (a, b) => b.modified.localeCompare(a.modified)
       : (a, b) => a.title.localeCompare(b.title, 'ru'));
     list.replaceChildren(...(songs.length
-      ? songs.map(s => songCard(s, student))
+      ? songs.map(s => songListItem(s, student))
       : [h('p', { class: 'muted' }, q ? 'Ничего не нашлось.' : 'Здесь пока нет песен.')]));
   };
 
@@ -310,6 +318,26 @@ function renderStudent(student) {
 }
 
 // ---------- Карточка песни ----------
+function songListItem(song, student, owner = false) {
+  const href = songPath(role, libraryKey, student.id, song.key);
+  return h('article', {class: 'song song-index-item', 'data-song-id': `${student.id}|${song.key}`},
+    h('div', {class: 'song-index-content'},
+      h('a', {class: 'song-index-title', href}, song.title),
+      h('p', {class: 'muted'}, owner ? `${student.name} · ` : '',
+        `${plural(song.variants.length, 'аудиозапись', 'аудиозаписи', 'аудиозаписей')}${song.lyrics ? ' · текст' : ''}`)),
+    isNew(song.modified) ? h('span', {class: 'badge'}, 'новое') : null,
+    h('a', {class: 'btn small', href, 'aria-label': `Открыть песню: ${song.title}`}, 'Открыть'));
+}
+
+function renderSong(student, key) {
+  const song = student.songs.find(s => s.key === key);
+  const back = h('a', {class: 'btn ghost small', href: studentPath(role, libraryKey, student.id)}, '← Список песен');
+  if (!song) return showState(h('p', {}, 'Песня переименована или больше недоступна.'), back);
+  document.title = `${song.title} — ${student.name}`;
+  main.replaceChildren(h('nav', {class: 'teacher-tools', 'aria-label': 'Навигация песни'}, back),
+    h('p', {class: 'eyebrow'}, student.name), songCard(song, student, {heading: 'h1'}));
+}
+
 function songReading(song, student) {
   const panel = h('section', { class: 'reading', hidden: true, 'aria-label': `Слова песни ${song.title}` });
   panel.append(h('label', {class: 'reading-appearance'}, 'Шрифт текста',
@@ -388,7 +416,7 @@ function impulseBlock(song, student) {
     h('p', { class: 'small impulse-hint' }, 'Обязательно: одно-два слова — с каким ощущением ты поёшь эту песню.'));
 }
 
-function songCard(song, student, { owner = false } = {}) {
+function songCard(song, student, { owner = false, heading = 'h2' } = {}) {
   const editorKey = `${student.id}|${song.key}`;
 
   const reader = songReading(song, student);
@@ -412,7 +440,7 @@ function songCard(song, student, { owner = false } = {}) {
 
   const card = h('article', { class: 'song' + (role === 'student' && !song.meta.impulse ? ' needs-impulse' : ''), 'data-song-id': `${student.id}|${song.key}` },
     h('div', { class: 'song-head' },
-      h('h2', {}, song.title),
+      h(heading, {}, song.title),
       isNew(song.modified) ? h('span', { class: 'badge' }, 'новое') : null,
       owner ? h('span', { class: 'owner' }, student.name) : null),
     impulseBlock(song, student),
@@ -688,6 +716,9 @@ function songEditor(song, student, { onClose, isNew = false }) {
     // При ошибке оставляем редактор открытым (уже с тем, что успело сохраниться).
     openEditor = failed ? `${folder}|${songKey(newTitle)}` : null;
     if (isNew && !failed) onClose();
+    if (!failed && parseRoute(location.hash)?.song && songKey(newTitle) !== song.key) {
+      history.replaceState(null, '', songPath(role, libraryKey, folder, songKey(newTitle)));
+    }
     await mutate(async () => {}, failed ? null : 'Сохранено');
   }
 
@@ -772,7 +803,7 @@ const player = (() => {
     waveController?.abort(); waveController = null; wavePeaks = null;
     waveStatus.textContent = ''; paintWave();
   }
-  async function prepareWave(cur) {
+  async function prepareWave(cur, requested = false) {
     const cache = `songs:wave:1:${cur.id}:${cur.v.file.modified}:${cur.v.file.size}`;
     try {
       const saved = JSON.parse(localGet(cache));
@@ -780,6 +811,9 @@ const player = (() => {
         wavePeaks = Float32Array.from(saved); waveStatus.textContent = ''; markActive(); return;
       }
     } catch {}
+    // Native playback starts without an extra full-track download and decode.
+    if (!requested) { waveStatus.textContent = 'Показать звуковую волну'; return; }
+    if (waveController) return;
     const controller = new AbortController(); waveController = controller;
     waveStatus.textContent = 'Готовим волновую форму…';
     try {
@@ -793,12 +827,15 @@ const player = (() => {
     } finally { if (waveController === controller) waveController = null; }
   }
 
+  waveStatus.addEventListener('click', () => { if (current?.url) prepareWave(current, true); });
   const fmt = t => {
     if (!isFinite(t)) return '0:00';
     t = Math.floor(t);
     return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
   };
 
+  const timeline = attachProgress(audio, {seek, current: cur, duration: dur, format: fmt,
+    canSeek: () => !!current?.url, onUpdate: paintWave});
   function markActive() {
     document.querySelectorAll('.chip.active').forEach(c => c.classList.remove('active'));
     document.querySelectorAll('.song').forEach(card => {
@@ -819,13 +856,16 @@ const player = (() => {
     bar.classList.remove('busy');
   }
   async function startAudio() {
+    const selected = current, my = token;
     playbackSession();
     try {
       await audio.play();
+      if (my !== token || selected !== current) return false;
       if (current?.url) sub.textContent = variantName(current.v) + (current.url.startsWith('blob:') ? ' · резервная копия' : '');
       return true;
     }
     catch (error) {
+      if (my !== token || selected !== current || error.name === 'AbortError') return false;
       if (error.name !== 'NotAllowedError') throw error;
       failed('Запись готова. Нажмите ▶, чтобы начать.');
       playBtn.setAttribute('aria-label', 'Играть');
@@ -886,6 +926,8 @@ const player = (() => {
     playbackSession(); primeAudio(audio);
     metro.setGrid(0, 0);
     current = { id, song, v, student, url: null };
+    dl.removeAttribute('href');
+    timeline.reset();
     bar.hidden = false;
     document.body.classList.add('has-player');
     impulseEl.hidden = !song.meta?.impulse;
@@ -967,6 +1009,7 @@ const player = (() => {
     }
     metro.setGrid(0, 0);
     showBpm();
+    if (!force) return showBpm('Задайте BPM, настучите или нажмите «Авто»');
     analysisController = new AbortController();
     try {
       const t = await detectTempo(cur.url, { signal: analysisController.signal, onProgress: text => { if (my === tempoToken) mStatus.textContent = text; } });
@@ -1076,8 +1119,8 @@ const player = (() => {
   audio.addEventListener('ratechange', () => showBpm());
 
   playBtn.addEventListener('click', toggleAudio);
-  $('.p-back').addEventListener('click', () => { audio.currentTime = Math.max(0, audio.currentTime - 5); });
-  $('.p-fwd').addEventListener('click', () => { audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + 5); });
+  $('.p-back').addEventListener('click', () => timeline.seekTo(audio.currentTime - 5));
+  $('.p-fwd').addEventListener('click', () => timeline.seekTo(audio.currentTime + 5));
   loopBtn.addEventListener('click', () => {
     audio.loop = !audio.loop;
     loopBtn.setAttribute('aria-pressed', String(audio.loop));
@@ -1090,29 +1133,18 @@ const player = (() => {
     cancelWave();
     cancelTempo(); cancelTaps();
     current = null;
+    audio.removeAttribute('src'); audio.load(); timeline.reset();
     if (metro.on) metroBtn.click();
     bar.hidden = true;
     document.body.classList.remove('has-player');
     markActive();
   });
 
-  let seeking = false;
-  seek.addEventListener('input', () => { seeking = true; cur.textContent = fmt(seek.value / 1000 * audio.duration); });
-  seek.addEventListener('change', () => { audio.currentTime = seek.value / 1000 * audio.duration; seeking = false; });
-
-  audio.addEventListener('timeupdate', () => {
-    if (seeking || !audio.duration) return;
-    seek.value = Math.round(audio.currentTime / audio.duration * 1000);
-    seek.style.setProperty('--p', seek.value / 10 + '%');
-    cur.textContent = fmt(audio.currentTime);
-    paintWave();
-  });
-  audio.addEventListener('loadedmetadata', () => { dur.textContent = fmt(audio.duration); });
   audio.addEventListener('seeked', paintWave);
   document.addEventListener('click', e => {
     if (!e.target.matches('.waveform-canvas') || !current || !Number.isFinite(audio.duration)) return;
     const rect = e.target.getBoundingClientRect();
-    audio.currentTime = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) * audio.duration;
+    if (rect.width > 0) timeline.seekTo(Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) * audio.duration);
   });
   new ResizeObserver(() => {
     document.documentElement.style.setProperty('--player-height', `${bar.hidden ? 0 : bar.getBoundingClientRect().height}px`);
