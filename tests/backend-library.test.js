@@ -52,3 +52,55 @@ test('stalled access settings fail within the read deadline without writing repl
     assert.deepEqual(budgets,[8000,8000]);
   }finally{globalThis.fetch=previous;AbortSignal.timeout=previousTimeout;console.error=previousError;}
 });
+
+test('missing or malformed access settings never regenerate existing pupil links', async()=>{
+  const previous=globalThis.fetch;
+  const previousError=console.error;
+  console.error=()=>{};
+  try {
+    for (const settings of [null, [], {}, {students:[]}, {students:{}},
+      {students:{a:{}}}, {students:{a:{key:'same'},b:{key:'same'}}}]) {
+      let writes=0;
+      globalThis.fetch=async(input,opts={})=>{
+        const url=new URL(input);
+        if(opts.method==='PUT' || url.pathname.endsWith('/upload')) {
+          writes++; throw new Error('Unexpected settings replacement');
+        }
+        if(url.hostname==='settings.invalid') return Response.json(settings);
+        if(url.pathname.endsWith('/download')) return settings===null
+          ? Response.json({message:'Missing'}, {status:404})
+          : Response.json({href:'https://settings.invalid'});
+        return Response.json({_embedded:{total:1,items:[
+          {type:'dir',name:'A',path:'disk:/test/A',resource_id:'a'}
+        ]}});
+      };
+      const result=await handler({httpMethod:'POST',body:JSON.stringify({action:'library',key:'test-teacher'})});
+      assert.equal(result.statusCode,503);
+      assert.equal(writes,0);
+    }
+  } finally {globalThis.fetch=previous;console.error=previousError;}
+});
+
+test('healthy settings keep existing pupil links when adding a newly discovered folder', async()=>{
+  const previous=globalThis.fetch;
+  let saved;
+  globalThis.fetch=async(input,opts={})=>{
+    const url=new URL(input),p=url.searchParams.get('path');
+    if(url.hostname==='settings.invalid')return Response.json({students:{a:{key:'existing-link'}}});
+    if(url.hostname==='upload.invalid'){saved=JSON.parse(opts.body);return new Response('',{status:201});}
+    if(url.pathname.endsWith('/download'))return Response.json({href:'https://settings.invalid'});
+    if(url.pathname.endsWith('/upload'))return Response.json({href:'https://upload.invalid'});
+    if(p==='disk:/test')return Response.json({_embedded:{total:2,items:[
+      {type:'dir',name:'A',path:'disk:/test/A',resource_id:'a'},
+      {type:'dir',name:'B',path:'disk:/test/B',resource_id:'b'}
+    ]}});
+    return Response.json({_embedded:{total:0,items:[]}});
+  };
+  try {
+    const result=await handler({httpMethod:'POST',body:JSON.stringify({action:'library',key:'test-teacher'})});
+    assert.equal(result.statusCode,200);
+    assert.equal(saved.students.a.key,'existing-link');
+    assert.equal(typeof saved.students.b.key,'string');
+    assert.notEqual(saved.students.b.key,'existing-link');
+  } finally {globalThis.fetch=previous;}
+});

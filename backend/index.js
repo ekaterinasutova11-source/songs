@@ -115,8 +115,19 @@ const newKey = () => crypto.randomBytes(9).toString('base64url');
 
 async function loadState() {
   const [settings, rootItems] = await Promise.all([readJson(SETTINGS, AbortSignal.timeout(8000)), list(ROOT)]);
-  const s = settings || { students: {} };
   const folders = rootItems.filter(i => i.type === 'dir');
+  // Never silently replace existing pupils' links after a missing/corrupt file.
+  // Initial setup is allowed only while the library has no pupil folders.
+  if ((!settings && folders.length) || (settings && (
+    typeof settings !== 'object' || Array.isArray(settings) ||
+    !settings.students || typeof settings.students !== 'object' || Array.isArray(settings.students)
+  ))) throw new HttpError(503, 'Настройки доступа недоступны. Ссылки сохранены без изменений; требуется восстановление настроек.');
+  const s = settings || { students: {} };
+  const keys = Object.values(s.students).map(entry => entry?.key);
+  if (keys.some(key => typeof key !== 'string' || !key.trim()) ||
+      new Set(keys).size !== keys.length || (folders.length && !keys.length)) {
+    throw new HttpError(503, 'Настройки доступа повреждены. Автоматическая замена ссылок отключена.');
+  }
   let changed = !settings;
   for (const f of folders) {
     if (!s.students[f.resource_id]) { s.students[f.resource_id] = { key: newKey() }; changed = true; }
