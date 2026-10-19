@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 const google = 'https://script.google.com/macros/s/test-deployment/exec';
 const primary = 'https://primary.invalid/api';
 const source = (await fs.readFile(new URL('../api.js', import.meta.url), 'utf8'))
-  .replace("import { FUNCTION_URL, GOOGLE_RESERVE_URL } from './config.js?v=reserve1';",
+  .replace(/import \{ FUNCTION_URL, GOOGLE_RESERVE_URL \} from '\.\/config\.js(?:\?[^']+)?';/,
     `const FUNCTION_URL = ${JSON.stringify(primary)}, GOOGLE_RESERVE_URL = ${JSON.stringify(google)};`)
   .replace("from './reserve.js?v=reserve1'", `from '${new URL('../reserve.js', import.meta.url).href}'`);
 let sequence = 0;

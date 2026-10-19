@@ -1,0 +1,10 @@
+[Unit]
+Description=Hourly Songs operational checks (results in system journal)
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

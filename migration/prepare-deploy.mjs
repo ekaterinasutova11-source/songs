@@ -1,0 +1,18 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+const output='secrets/selectel-2026-10-20/deploy';
+if(fs.existsSync(output))throw new Error('Existing deployment staging directory');
+fs.mkdirSync(path.join(output,'site'),{recursive:true});
+fs.mkdirSync(path.join(output,'app','migration'),{recursive:true});
+for(const file of fs.readdirSync('migration'))if(/\.(mjs|conf|service|timer|sh)$/.test(file))fs.copyFileSync(path.join('migration',file),path.join(output,'app','migration',file));
+for(const file of fs.readdirSync('.'))if(/\.(html|js|css|svg)$/.test(file) && !['server.js','config.js'].includes(file))fs.copyFileSync(file,path.join(output,'site',file));
+const index=path.join(output,'site','index.html');
+fs.writeFileSync(index,fs.readFileSync(index,'utf8').replace('<body>','<body>\n  <p role="status" style="padding:12px;text-align:center;background:#fff2d6;color:#493715;margin:0">Проверка переноса: библиотека доступна для чтения. Изменения пока вносите на прежнем сайте.</p>'));
+fs.writeFileSync(path.join(output,'site','config.js'),`export const FUNCTION_URL='/api';\nexport const GOOGLE_RESERVE_URL='';\nexport const NEW_DAYS=2;\nexport const NEW_SINCE='2026-10-01';\n`);
+const teacher=fs.readFileSync('secrets/teacher.env','utf8').match(/^TEACHER_KEY=(.*)$/m)?.[1].trim();
+if(!teacher || !/^[\w-]+$/.test(teacher))throw new Error('Unexpected teacher key format');
+const lines={TEACHER_KEY:teacher,SIGNING_KEY:crypto.randomBytes(48).toString('base64url'),BASE_URL:'https://135.106.183.211',DATA_DIR:'/var/lib/songs',READ_ONLY:'true',ALLOWED_ORIGINS:'https://ekaterinasutova11-source.github.io',PORT:'3000'};
+fs.writeFileSync(path.join(output,'app.env'),Object.entries(lines).map(([k,v])=>`${k}=${v}`).join('\n')+'\n');
+fs.writeFileSync(path.join(output,'backup-password'),crypto.randomBytes(48).toString('base64url')+'\n');
+console.log('Prepared private deployment package');

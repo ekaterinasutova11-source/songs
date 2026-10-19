@@ -1,5 +1,5 @@
-// Запросы к посреднику в Yandex Cloud.
-import { FUNCTION_URL, GOOGLE_RESERVE_URL } from './config.js?v=reserve1';
+// Requests to the private Selectel API.
+import { FUNCTION_URL, GOOGLE_RESERVE_URL } from './config.js?v=selectel1';
 import { createReserveClient } from './reserve.js?v=reserve1';
 
 // На своём компьютере (node server.js) посредник работает по адресу /api.

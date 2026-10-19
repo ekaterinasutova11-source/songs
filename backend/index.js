@@ -362,7 +362,26 @@ export async function handler(event) {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers, body: '' };
   try {
     const raw = event.isBase64Encoded ? Buffer.from(event.body || '', 'base64').toString('utf8') : event.body;
-    const result = await handle(JSON.parse(raw || '{}'));
+    // Keep already-open clients and their original API URL on the new source.
+    if (process.env.SELECTEL_API_URL) {
+      try {
+        const upstream = await fetch(process.env.SELECTEL_API_URL, {
+          method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: raw || '{}', signal: AbortSignal.timeout(25000),
+        });
+        const body = await upstream.text();
+        // Old cached clients have a stale Google fallback for 5xx responses.
+        // Use 424 so failures never quietly select that outdated library.
+        return { statusCode: upstream.status >= 500 ? 424 : upstream.status, headers, body };
+      } catch {
+        return { statusCode: 424, headers, body: JSON.stringify({ error: 'Новый сервер временно недоступен. Попробуйте ещё раз.' }) };
+      }
+    }
+    const request = JSON.parse(raw || '{}');
+    if (process.env.MIGRATION_READ_ONLY === 'true' && !['library', 'url'].includes(request.action)) {
+      throw new HttpError(503, 'Завершаем перенос на новый сервер. Изменения временно приостановлены, попробуйте через несколько минут.');
+    }
+    const result = await handle(request);
     return { statusCode: 200, headers, body: JSON.stringify(result) };
   } catch (e) {
     const status = e instanceof HttpError ? e.status : 500;

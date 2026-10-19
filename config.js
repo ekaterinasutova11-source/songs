@@ -1,8 +1,8 @@
-// Адрес посредника в Yandex Cloud (Cloud Function), через который сайт работает с Диском.
-export const FUNCTION_URL = 'https://functions.yandexcloud.net/d4eotnn5qmurkd5kle8k';
+// Private file API hosted on Selectel. Existing hash routes and access keys are unchanged.
+export const FUNCTION_URL = 'https://135.106.183.211/api';
 
-// Enable only after the independent private reserve passes real browser checks.
-export const GOOGLE_RESERVE_URL = 'https://script.google.com/macros/s/AKfycbwWoMLmNQiOc3xpGLpA9eVYnywKidU0C8af80T5PCYotPFfeiHDL4kWxZ0jluPz1ZA/exec';
+// Backups are independent restic snapshots; never fall back to an outdated library.
+export const GOOGLE_RESERVE_URL = '';
 
 // Песни, изменённые за это число дней, помечаются как «новое».
 export const NEW_DAYS = 2;

@@ -5,6 +5,7 @@ import http from 'node:http';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { FUNCTION_URL } from './config.js';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT) || 5173;
@@ -23,6 +24,8 @@ await loadEnv('teacher.env');
 process.env.DISK_TOKEN ??= process.env.YANDEX_DISK_TOKEN;
 process.env.ROOT ??= 'disk:/Песни для Notion';
 process.env.SETTINGS ??= 'disk:/Песни учеников — настройки (не удалять).json';
+// Local previews use the same storage as the published application after cutover.
+if (FUNCTION_URL === 'https://135.106.183.211/api') process.env.SELECTEL_API_URL = FUNCTION_URL;
 const { handler } = await import('./backend/index.js');
 
 http.createServer(async (req, res) => {

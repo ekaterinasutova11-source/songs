@@ -1,0 +1,29 @@
+[Unit]
+Description=Songs private library API
+After=network.target
+
+[Service]
+Type=simple
+User=songs
+Group=songs
+WorkingDirectory=/opt/songs
+EnvironmentFile=/etc/songs/app.env
+ExecStart=/usr/local/bin/node /opt/songs/migration/server.mjs
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/songs
+RestrictSUIDSGID=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LimitNOFILE=8192
+MemoryMax=768M
+
+[Install]
+WantedBy=multi-user.target

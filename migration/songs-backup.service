@@ -1,0 +1,9 @@
+[Unit]
+Description=Encrypted Songs backup with SQLite consistency check
+After=songs.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/songs-backup
+Nice=10
+IOSchedulingClass=idle

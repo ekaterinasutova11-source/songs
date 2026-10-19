@@ -1,0 +1,7 @@
+[Unit]
+Description=Check Songs HTTPS, certificate, backups and disk space
+After=network-online.target songs.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/songs-monitor
