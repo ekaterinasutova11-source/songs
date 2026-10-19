@@ -8,7 +8,7 @@ if (!database || !blobs) throw new Error('Pass database and blob directory');
 const db=new DatabaseSync(database,{readOnly:true});
 try {
   if(db.prepare('PRAGMA integrity_check').get().integrity_check !== 'ok') throw new Error('SQLite integrity failure');
-  const files=db.prepare('SELECT blob,size FROM files WHERE deleted=0').all();
+  const files=db.prepare('SELECT blob,size FROM files WHERE deleted=0 AND folder IN (SELECT id FROM folders WHERE deleted=0)').all();
   for(const row of files) {
     const sha=crypto.createHash('sha256');let size=0;
     for await(const chunk of fs.createReadStream(path.join(blobs,row.blob))){sha.update(chunk);size+=chunk.length;}

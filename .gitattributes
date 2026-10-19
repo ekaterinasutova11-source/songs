@@ -1,0 +1,4 @@
+migration/*.sh text eol=lf
+migration/*.service text eol=lf
+migration/*.timer text eol=lf
+migration/*.conf text eol=lf
