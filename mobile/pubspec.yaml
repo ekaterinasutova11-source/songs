@@ -1,0 +1,42 @@
+name: songs
+description: 'Сад звука — песни и материалы для занятий вокалом.'
+publish_to: 'none'
+version: 0.1.0+1
+environment:
+  sdk: ^3.13.5
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.6.0
+  just_audio: ^0.10.6
+  just_audio_background: ^0.0.1-beta.17
+  flutter_secure_storage: ^11.2.0
+  unorm_dart: ^0.3.3
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/fonts/manrope-OFL.txt
+    - assets/fonts/cormorantgaramond-OFL.txt
+  fonts:
+    - family: Manrope
+      fonts:
+        - asset: assets/fonts/a13d9b41b0a471ce58f0.ttf
+        - asset: assets/fonts/f433e5d333be1128d8ec.ttf
+          weight: 500
+        - asset: assets/fonts/6bad1a774228464cc88b.ttf
+          weight: 600
+        - asset: assets/fonts/b9584e099e0e7f1e1e91.ttf
+          weight: 700
+    - family: Cormorant
+      fonts:
+        - asset: assets/fonts/1724047c8988ca5155bf.ttf
+          weight: 500
+        - asset: assets/fonts/69e7ae35cba23d962227.ttf
+          weight: 600
+        - asset: assets/fonts/14efb9443652199ade5b.ttf
+          weight: 500
+          style: italic
