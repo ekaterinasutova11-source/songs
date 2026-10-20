@@ -6,7 +6,7 @@ const credentials=Object.fromEntries(result.trim().split('\n').map(line=>{const 
 if(!credentials.password)throw new Error('No existing GitHub credential');
 export async function github(endpoint,options={}){
   const r=await fetch('https://api.github.com/repos/'+repo+endpoint,{...options,headers:{Authorization:'Bearer '+credentials.password,Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28',...options.headers}});
-  const data=await r.json();if(!r.ok)throw new Error(`GitHub HTTP ${r.status}: ${data.message}`);return data;
+  const data=r.status===204?null:await r.json();if(!r.ok)throw new Error(`GitHub HTTP ${r.status}: ${data?.message}`);return data;
 }
 if(process.argv[2]==='status'){
   const project=await github('');

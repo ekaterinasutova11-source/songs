@@ -1,0 +1,4 @@
+# Project-scoped agent defaults. Model and permissions inherit from the parent.
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 2

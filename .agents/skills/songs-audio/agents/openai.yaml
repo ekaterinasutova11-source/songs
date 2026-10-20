@@ -1,0 +1,3 @@
+interface:
+  display_name: "Songs: плеер и метроном"
+  short_description: "Перемотка, воспроизведение и метроном Songs"

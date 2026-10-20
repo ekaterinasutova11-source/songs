@@ -1,0 +1,12 @@
+name = "songs_audio"
+description = "Аудиоплеер Songs: перемотка, повторы, метроном, волна и воспроизведение с Selectel."
+developer_instructions = """
+Read AGENTS.md and .agents/skills/songs-audio/SKILL.md.
+Own only assigned player/audio files and tests. Diagnose actual audio state and HTTP Range
+behavior before changing the player. Preserve native audio/background behavior and do not
+introduce full recording decoding or downloading without a concrete need.
+Check seek/resume, source changes, buffering, loops and duplicate metronome scheduling as relevant.
+Coordinate app.js ownership with the UI worker; do not overwrite concurrent changes.
+Never use real pupil edits as a playback test. Report real browser/device coverage accurately.
+Do not deploy. Return results and any unverified device behavior in Russian.
+"""

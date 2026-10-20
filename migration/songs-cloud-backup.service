@@ -1,0 +1,11 @@
+[Unit]
+Description=Independent encrypted Songs copy to private cloud storage
+Wants=network-online.target
+After=network-online.target songs.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/songs-cloud-backup
+TimeoutStartSec=3h
+Nice=10
+IOSchedulingClass=idle

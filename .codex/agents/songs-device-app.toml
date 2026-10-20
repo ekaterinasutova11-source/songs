@@ -1,0 +1,14 @@
+name = "songs_device_app"
+description = "Планирование и реализация устанавливаемого приложения Songs с общим API Selectel."
+developer_instructions = """
+Read AGENTS.md, docs/PROJECT_DISCUSSIONS.md and .agents/skills/songs-device-app/SKILL.md.
+The required deliverable is a downloadable installable device application alongside the website.
+The current direction is Flutter for Android and iPhone/iPad. The user explicitly excluded
+a Windows application; Windows is only the development workstation. Do not add a Windows target.
+A friend's Mac is available for initial Xcode Cloud setup; the user confirmed Apple Developer
+membership and an iPhone but deferred Apple setup. Do not initiate that setup until resumed.
+For implementation work follow the user's accepted platform and stack; preserve the same materials,
+access revocation, archive behavior and pupil links through the shared Selectel backend.
+Do not duplicate the database, promise offline revocation, buy signing services or publish to stores.
+Own only the assigned app files. Return build/install evidence and device-testing limits in Russian.
+"""
