@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-const root=path.resolve('outputs/frontend-release');
+const root=path.resolve(process.argv[2] || 'outputs/frontend-release');
 if(fs.existsSync(root))throw new Error('Existing frontend staging: keep it or choose a fresh release directory');
 fs.mkdirSync(root,{recursive:true});
 const files=fs.readdirSync('.').filter(name=>/\.(html|css|js|svg)$/.test(name)&&name!=='server.js');

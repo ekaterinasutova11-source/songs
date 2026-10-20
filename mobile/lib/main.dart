@@ -9,6 +9,7 @@ import 'data.dart';
 import 'player.dart';
 import 'brand.dart';
 import 'lyrics.dart';
+import 'ui_settings.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -55,10 +56,25 @@ class SecureSessionStore implements SessionStore {
   Future<void> clear() => _storage.delete(key: _name);
 }
 
-class SongsApp extends StatelessWidget {
-  const SongsApp({super.key, this.api, this.store});
+class SongsApp extends StatefulWidget {
+  const SongsApp({super.key, this.api, this.store, this.uiStore});
   final SongsApi? api;
   final SessionStore? store;
+  final UiSettingsStore? uiStore;
+  @override
+  State<SongsApp> createState() => _SongsAppState();
+}
+
+class _SongsAppState extends State<SongsApp> {
+  late final _settings = UiSettingsController(
+    widget.uiStore ?? SecureUiSettingsStore(),
+  );
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_settings.load());
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -66,8 +82,22 @@ class SongsApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: gardenTheme(Brightness.light),
       darkTheme: gardenTheme(Brightness.dark),
-      home: LibraryHome(api: api, store: store),
+      builder: (context, child) => UiSettingsScope(
+        controller: _settings,
+        child: ListenableBuilder(
+          listenable: _settings,
+          builder: (context, _) =>
+              ScaledInterface(scale: _settings.scale, child: child!),
+        ),
+      ),
+      home: LibraryHome(api: widget.api, store: widget.store),
     );
+  }
+
+  @override
+  void dispose() {
+    _settings.dispose();
+    super.dispose();
   }
 }
 
@@ -82,7 +112,9 @@ class LibraryHome extends StatefulWidget {
 class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
   late final SongsApi _api = widget.api ?? SongsApi();
   late final SessionStore _store = widget.store ?? SecureSessionStore();
-  late final PlayerController _player = PlayerController(onAccessDenied: _deny);
+  late final PlayerController _player = PlayerController(
+    onAccessDenied: _mediaDenied,
+  );
   final _link = TextEditingController();
   Session? _session;
   Library? _library;
@@ -208,22 +240,34 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
       final library = await _api.library(session);
       if (!mounted || epoch != _epoch) return;
       final previousSong = _songId;
+      final previousSpace = _studentId;
+      var spaceRemoved = false;
       setState(() {
         _library = library;
         _blocked = false;
         _error = null;
-        if (!session.isTeacher) _studentId = library.students.firstOrNull?.id;
+        if (!session.isTeacher && _studentId == null) {
+          _studentId = library.personalSpaceId;
+        }
         if (_studentId != null &&
             !library.students.any((s) => s.id == _studentId)) {
-          _studentId = null;
+          spaceRemoved = true;
+          _studentId = session.isTeacher ? null : library.personalSpaceId;
           _songId = null;
+        }
+        if (spaceRemoved || previousSpace != _studentId) {
+          _textEpoch++;
+          _lyrics = null;
+          _lyricsLoading = false;
         }
         if (_songId != null &&
             !(_student?.songs.any((s) => s.key == _songId) ?? false)) {
           _songId = null;
         }
       });
-      if (previousSong != null && _songId == null) await _player.stop();
+      if (spaceRemoved || (previousSong != null && _songId == null)) {
+        await _player.stop();
+      }
       if (!mounted || epoch != _epoch) return;
       if (_song != null && _lyrics == null && !_lyricsLoading) {
         unawaited(_loadLyrics());
@@ -255,6 +299,46 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
       _blocked = true;
       _loading = false;
       _error = 'Доступ к материалам закрыт. Обратитесь к преподавателю. Материалы сохраняются.';
+    });
+  }
+
+  // A removed membership must not sign the pupil out of personal materials.
+  // Rechecking the library still blocks an archived/invalid personal key.
+  void _mediaDenied() {
+    if (!mounted) return;
+    if (_session?.isTeacher != false ||
+        _studentId == _library?.personalSpaceId) {
+      _deny();
+      return;
+    }
+    _epoch++;
+    _textEpoch++;
+    _refreshing = false;
+    unawaited(_player.stop());
+    setState(() {
+      _studentId = _library?.personalSpaceId;
+      _songId = null;
+      _lyrics = null;
+      _lyricsLoading = false;
+      _error = 'Доступ к общему пространству изменился. Обновляем материалы.';
+    });
+    unawaited(_refresh(quiet: true));
+  }
+
+  void _selectSpace(String id) {
+    if (_studentId == id ||
+        !(_library?.students.any((space) => space.id == id) ?? false)) {
+      return;
+    }
+    _textEpoch++;
+    unawaited(_player.stop());
+    setState(() {
+      _studentId = id;
+      _songId = null;
+      _lyrics = null;
+      _lyricsLoading = false;
+      _query = '';
+      _error = null;
     });
   }
 
@@ -311,7 +395,13 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
       final text = await _api.lyrics(session, student.id, file);
       if (mounted && token == _textEpoch) setState(() => _lyrics = text);
     } on ApiFailure catch (failure) {
-      if (mounted && token == _textEpoch) _failure(failure);
+      if (mounted && token == _textEpoch) {
+        if (failure.status == 403) {
+          _mediaDenied();
+        } else {
+          _failure(failure);
+        }
+      }
     } catch (_) {
       if (mounted && token == _textEpoch) {
         _message('Не удалось загрузить текст. Проверьте интернет.');
@@ -363,22 +453,34 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
         appBar: AppBar(
           leading: canBack ? BackButton(onPressed: _back) : null,
           titleSpacing: canBack ? 0 : 20,
-          title: Row(
-            children: [
-              const GardenMark(size: 27),
-              const SizedBox(width: 8),
-              Flexible(
-                child: Text(
-                  'Сад звука',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.headlineMedium
-                      ?.copyWith(fontFamily: 'Cormorant', fontSize: 27),
-                ),
-              ),
-            ],
+          title: LayoutBuilder(
+            builder: (context, constraints) {
+              // Leave navigation and Aa/logout reachable on narrow screens at
+              // large interface scale instead of overflowing the brand mark.
+              if (constraints.maxWidth < 40) return const SizedBox.shrink();
+              return Row(
+                children: [
+                  const GardenMark(size: 27),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      'Сад звука',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.headlineMedium
+                          ?.copyWith(fontFamily: 'Cormorant', fontSize: 27),
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
           actions: [
+            IconButton(
+              onPressed: () => showDisplaySettings(context),
+              tooltip: 'Размер интерфейса',
+              icon: const Text('Aa', style: TextStyle(fontSize: 18)),
+            ),
             if (_session != null) ...[
               IconButton(
                 onPressed: () => _refresh(),
@@ -500,7 +602,7 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
     ),
   );
   Widget _statusView() => Center(
-    child: Padding(
+    child: SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -542,6 +644,7 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
         physics: const AlwaysScrollableScrollPhysics(),
         children: [
+          if (_session?.isTeacher == false) _spaceSelector(),
           _eyebrow(student == null ? 'КАБИНЕТ ПРЕПОДАВАТЕЛЯ' : 'МОЙ РЕПЕРТУАР'),
           const SizedBox(height: 10),
           Text(
@@ -557,7 +660,7 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
           if (student?.isArchived == true)
             const Text('В архиве · ученику доступ закрыт'),
           const SizedBox(height: 20),
-          if (student == null)
+          if (student == null && _session?.isTeacher == true)
             Padding(
               padding: const EdgeInsets.only(bottom: 16),
               child: SegmentedButton<bool>(
@@ -589,8 +692,8 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
               Card(
                 child: ListTile(
                   contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 18,
-                    vertical: 10,
+                    horizontal: 16,
+                    vertical: 4,
                   ),
                   leading: DecoratedBox(
                     decoration: BoxDecoration(
@@ -603,7 +706,7 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
                       ),
                     ),
                     child: Padding(
-                      padding: const EdgeInsets.all(12),
+                      padding: const EdgeInsets.all(9),
                       child: Icon(
                         Icons.music_note_outlined,
                         color: Theme.of(context).colorScheme.primary,
@@ -613,7 +716,7 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
                   title: Text(
                     song.title,
                     style: Theme.of(context).textTheme.headlineMedium
-                        ?.copyWith(fontSize: 26),
+                        ?.copyWith(fontSize: 19),
                   ),
                   subtitle: Text(
                     '${song.variants.length} аудиодорожек${song.lyricsFile != null ? ' · есть текст' : ''}',
@@ -647,10 +750,7 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
                   ),
                   subtitle: Text('${item.songs.length} песен'),
                   trailing: const Icon(Icons.chevron_right),
-                  onTap: () => setState(() {
-                    _studentId = item.id;
-                    _query = '';
-                  }),
+                  onTap: () => _selectSpace(item.id),
                 ),
               ),
           ],
@@ -662,6 +762,7 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
   Widget _songView(Song song) => ListView(
     padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
     children: [
+      if (_session?.isTeacher == false) _spaceSelector(),
       _eyebrow(_student?.name ?? ''),
       const SizedBox(height: 8),
       Text(song.title, style: Theme.of(context).textTheme.headlineLarge),
@@ -688,6 +789,47 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
           ),
     ],
   );
+  Widget _spaceSelector() {
+    final spaces = _library!.students;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: DropdownButtonFormField<String>(
+        key: ValueKey('space-selector-$_studentId'),
+        initialValue: spaces.any((space) => space.id == _studentId)
+            ? _studentId
+            : null,
+        isExpanded: true,
+        menuMaxHeight: MediaQuery.sizeOf(context).height * .6,
+        decoration: const InputDecoration(labelText: 'Мои пространства'),
+        items: [
+          for (final space in spaces)
+            DropdownMenuItem(
+              value: space.id,
+              child: Text(
+                '${space.name} · ${space.kindLabel}',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+        ],
+        selectedItemBuilder: (context) => [
+          for (final space in spaces)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                '${space.name} · ${space.kindLabel}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+        ],
+        onChanged: (id) {
+          if (id != null) _selectSpace(id);
+        },
+      ),
+    );
+  }
+
   Widget _eyebrow(String text) => Text(
     text.toUpperCase(),
     style: TextStyle(

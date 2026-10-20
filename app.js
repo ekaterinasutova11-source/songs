@@ -6,7 +6,8 @@ import { Metronome, StandaloneMetronome, DRUM_PATTERNS, fitTaps } from './metron
 import { detectTempo, TEMPO_VERSION } from './tempo.js?v=metro3';
 import { loadWaveform, drawWaveform } from './waveform.js?v=garden1';
 import { attachMediaControls, playbackSession, primeAudio } from './media.js?v=mobile1';
-import { parseRoute, studentPath, songPath } from './navigation.js?v=archive1';
+import { parseRoute, studentPath, songPath, selectStudentSpace, canEditSpace } from './navigation.js?v=spaces1';
+import { readScale, applyScale } from './interface-scale.js?v=spaces1';
 import { attachProgress } from './player-progress.js?v=songpages1';
 
 const main = document.getElementById('main');
@@ -15,6 +16,7 @@ let library = null;      // [{id, name, key?, songs}]
 let libraryKey = null;   // для какого ключа загружена библиотека
 let openEditor = null;   // песня, у которой открыт редактор (folder + key)
 let teacherArchive = false;
+let ownId = null;
 
 // ---------- Маленький помощник для создания элементов ----------
 function h(tag, attrs = {}, ...children) {
@@ -44,6 +46,18 @@ const extOf = name => (name.match(/\.[^.]+$/) || ['.mp3'])[0].toLowerCase();
 
 function localGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function localSet(k, v) { try { localStorage.setItem(k, v); } catch { /* приватный режим */ } }
+// Accessing localStorage itself may be forbidden by the browser.
+let scaleStorage;
+try { scaleStorage = localStorage; } catch { scaleStorage = null; }
+const scaleSelect = document.querySelector('.interface-scale');
+if (scaleSelect) {
+  const value = applyScale(document.documentElement, scaleStorage, readScale(scaleStorage));
+  scaleSelect.value = String(value);
+  scaleSelect.addEventListener('change', () => {
+    scaleSelect.value = String(applyScale(document.documentElement, scaleStorage, scaleSelect.value));
+    window.dispatchEvent(new Event('resize'));
+  });
+}
 const lyricFonts = {modern: 'Современный', book: 'Книжный', clear: 'Чёткий', spacious: 'Просторный'};
 const selectedLyricFont = () => Object.hasOwn(lyricFonts, localGet('songs:lyrics-font')) ? localGet('songs:lyrics-font') : 'modern';
 document.documentElement.dataset.lyricsFont = selectedLyricFont();
@@ -100,7 +114,7 @@ async function ensureLibrary(key, force) {
   const request = ++libraryRequest;
   if (library && libraryKey === key && !force) return;
   setKey(key);
-  const data = await call('library');
+  const data = await call('library', {includeSpaces: true});
   if (request !== libraryRequest) return;
   reserveNotice.hidden = !data.reserve && !data.students.some(s => s.metadataUnavailable);
   if (data.reserve) {
@@ -111,9 +125,10 @@ async function ensureLibrary(key, force) {
     reserveNotice.textContent = 'Песни доступны. Яндекс временно не отдал переводы и заметки одной из страниц. Обновите страницу позже; прежние данные сохранены на диске.';
   }
   role = data.role;
+  ownId = data.ownId || (role === 'student' ? data.students[0]?.id : null);
   libraryKey = key;
   library = data.students
-    .map(d => ({ id: d.id, name: d.name, key: d.key, archivedAt: d.archivedAt || null, songs: withMeta(groupSongs(d.files), d.meta) }))
+    .map(d => ({ id: d.id, name: d.name, key: d.key, kind: d.kind || 'individual', members: d.members || [], archivedAt: d.archivedAt || null, songs: withMeta(groupSongs(d.files), d.meta) }))
     .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
 }
 
@@ -145,7 +160,15 @@ async function route(force = false, quiet = false) {
       e.status === 403 ? null : h('button', { class: 'btn', onclick: () => route(true) }, 'Попробовать снова'));
   }
   standalone.setVisible(role === 'teacher' && mode === 't');
-  if (role === 'student' || mode === 's') return song ? renderSong(library[0], song) : renderStudent(library[0]);
+  if (role === 'student' || mode === 's') {
+    const space = selectStudentSpace(library, ownId || library[0]?.id, folder);
+    if (!space) {
+      if (!force) return route(true, quiet);
+      return showState(h('p', {}, 'Это пространство недоступно по вашей личной ссылке.'),
+        h('a', {class: 'btn', href: `#/s/${key}`}, 'К моим песням'));
+    }
+    return song ? renderSong(space, song) : renderStudent(space);
+  }
   if (folder) {
     const s = library.find(x => x.id === folder);
     if (s) return song ? renderSong(s, song) : renderStudent(s);
@@ -271,12 +294,54 @@ function studentCard(s, key) {
 
 const studentArchiveLabel = s => s.archivedAt ? h('span', { class: 'badge' }, 'В архиве · доступ закрыт') : null;
 
+const spaceKind = space => ({duet: 'Дуэт', ensemble: 'Ансамбль'}[space.kind] || 'Личные песни');
+
+function spaceSwitcher(current) {
+  if (role !== 'student') return null;
+  return h('nav', {class: 'space-switcher', 'aria-label': 'Мои пространства'},
+    h('p', {class: 'eyebrow'}, 'Мои пространства'),
+    h('div', {class: 'space-links'}, library.map(space => h('a', {
+      class: 'btn small', href: studentPath(role, libraryKey, space.id, ownId),
+      'aria-current': space.id === current.id ? 'page' : null,
+    }, space.id === ownId && space.kind === 'individual' ? 'Мои песни' : space.name,
+    h('span', {class: 'space-kind'}, spaceKind(space))))));
+}
+
+function manageMembers(space) {
+  const checks = library.filter(s => s.kind === 'individual' && s.id !== space.id).map(student => {
+    const input = h('input', {type: 'checkbox', value: student.id, checked: space.members.includes(student.id)});
+    return {input, label: h('label', {class: 'space-member'}, input, student.name,
+      student.archivedAt ? h('span', {class: 'muted small'}, 'в архиве') : null)};
+  });
+  const status = h('p', {class: 'muted', role: 'status'});
+  const save = h('button', {class: 'btn primary', onclick: async () => {
+    save.disabled = true;
+    try {
+      await call('setSpaceMembers', {folder: space.id, kind: space.kind,
+        members: checks.filter(x => x.input.checked).map(x => x.input.value)});
+      dialog.close();
+      toast('Участники сохранены. Доступ — по их личным ссылкам');
+      await route(true, true);
+    } catch (error) { status.textContent = error.message; }
+    finally { save.disabled = false; }
+  }}, 'Сохранить');
+  const dialog = h('dialog', {class: 'archive-dialog members-dialog', 'aria-labelledby': 'members-title'},
+    h('h2', {id: 'members-title'}, `Участники: ${space.name}`),
+    h('p', {}, 'Отметьте учеников, которым доступно это общее пространство. Их личные песни остаются доступны только им. Участники могут слушать и читать общие материалы.'),
+    h('div', {class: 'space-members'}, checks.length ? checks.map(x => x.label) : h('p', {class: 'muted'}, 'Сначала добавьте личные страницы учеников.')),
+    status,
+    h('div', {class: 'student-actions'}, h('button', {class: 'btn ghost', autofocus: true, onclick: () => dialog.close()}, 'Отмена'), save));
+  dialog.addEventListener('close', () => dialog.remove(), {once: true});
+  document.body.append(dialog); dialog.showModal();
+}
+
 // ---------- Страница ученика ----------
 let sortMode = localGet('sort') || 'name';
 
 function renderStudent(student) {
   document.title = `${student.name} — Песни`;
   const isTeacher = role === 'teacher';
+  const editable = canEditSpace(role, ownId, student);
   const list = h('div', { class: 'songs song-index', 'aria-label': 'Список песен' });
   const addBox = h('div', { class: 'add-song', hidden: true });
 
@@ -309,6 +374,7 @@ function renderStudent(student) {
   const teacherTools = isTeacher && h('div', { class: 'teacher-tools' },
     h('a', { class: 'btn ghost small', href: `#/t/${libraryKey}${student.archivedAt ? '/archive' : ''}` }, student.archivedAt ? '← Архив учеников' : '← Все ученики'),
     student.archivedAt && h('button', { class: 'btn small primary', onclick: () => restoreStudent(student) }, 'Восстановить ученика'),
+    student.kind !== 'individual' && h('button', {class: 'btn small', onclick: () => manageMembers(student)}, 'Участники'),
     (() => {
       const b = h('button', { class: 'btn small', onclick: () => copyText(studentLink(student), b) }, /ансамбль/i.test(student.name) ? 'Скопировать ссылку ансамбля' : 'Скопировать ссылку ученика');
       return b;
@@ -332,16 +398,19 @@ function renderStudent(student) {
         !student.archivedAt && h('button', { class: 'btn small', onclick: () => archiveStudent(student) }, 'Отправить в архив'))));
 
   main.replaceChildren(...[
+    spaceSwitcher(student),
     teacherTools,
     isTeacher && student.archivedAt && h('p', { class: 'archive-notice' }, 'Ученик в архиве. Его доступ закрыт, все материалы сохранены.'),
-    isTeacher && /ансамбль/i.test(student.name) && h('p', {class: 'muted ensemble-hint'}, 'Одна ссылка для всех участников ансамбля. Можно открывать одновременно на разных устройствах.'),
+    student.kind !== 'individual' && h('p', {class: 'muted ensemble-hint'}, isTeacher
+      ? 'Общие песни доступны участникам через их личные ссылки. Состав можно изменить в «Участники».'
+      : 'Общие материалы для занятий. Изменения вносит преподаватель.'),
     h('header', { class: 'page-head' },
       h('div', {},
         h('p', { class: 'eyebrow' }, isTeacher ? 'Репертуар ученика' : 'Моя музыка'),
         h('h1', {}, student.name),
         h('p', { class: 'page-phrase' }, 'Можно звучать по-своему.'),
         h('p', { class: 'muted' }, plural(student.songs.length, 'песня', 'песни', 'песен'))),
-      h('div', { class: 'head-actions' }, addBtn)),
+      editable && h('div', { class: 'head-actions' }, addBtn)),
     addBox,
     h('div', { class: 'toolbar' }, search, sort),
     list,
@@ -351,7 +420,7 @@ function renderStudent(student) {
 
 // ---------- Карточка песни ----------
 function songListItem(song, student, owner = false) {
-  const href = songPath(role, libraryKey, student.id, song.key);
+  const href = songPath(role, libraryKey, student.id, song.key, ownId);
   return h('a', {class: 'song song-index-item', href, 'aria-label': `Открыть песню: ${song.title}`, 'data-song-id': `${student.id}|${song.key}`},
     h('div', {class: 'song-index-content'},
       h('span', {class: 'song-index-title'}, song.title),
@@ -363,11 +432,11 @@ function songListItem(song, student, owner = false) {
 
 function renderSong(student, key) {
   const song = student.songs.find(s => s.key === key);
-  const back = h('a', {class: 'btn ghost small', href: studentPath(role, libraryKey, student.id)}, '← Список песен');
+  const back = h('a', {class: 'btn ghost small', href: studentPath(role, libraryKey, student.id, ownId)}, '← Список песен');
   if (!song) return showState(h('p', {}, 'Песня переименована или больше недоступна.'), back);
   document.title = `${song.title} — ${student.name}`;
-  main.replaceChildren(h('nav', {class: 'teacher-tools', 'aria-label': 'Навигация песни'}, back),
-    h('p', {class: 'eyebrow'}, student.name), songCard(song, student, {heading: 'h1'}));
+  main.replaceChildren(...[spaceSwitcher(student), h('nav', {class: 'teacher-tools', 'aria-label': 'Навигация песни'}, back),
+    h('p', {class: 'eyebrow'}, student.name), songCard(song, student, {heading: 'h1'})].filter(Boolean));
 }
 
 function songReading(song, student) {
@@ -419,7 +488,7 @@ function variantHelp(v) {
 // «Импульс»: ученик вписывает 1–2 слова; преподаватель видит их у песни.
 function impulseBlock(song, student) {
   const value = song.meta.impulse || '';
-  if (role !== 'student') {
+  if (role !== 'student' || !canEditSpace(role, ownId, student)) {
     return h('div', { class: 'impulse' + (value ? '' : ' empty') },
       h('span', { class: 'impulse-label' }, 'Импульс'),
       h('span', { class: 'impulse-word' }, value || 'ученик ещё не вписал'));
@@ -457,8 +526,9 @@ function songCard(song, student, { owner = false, heading = 'h2' } = {}) {
   // Редактор: пока он открыт, окна для чтения и ссылки скрыты.
   const editBox = h('div', { class: 'editor', hidden: true });
   const links = h('div', { class: 'song-links' }, reader.controls,
-    h('button', { class: 'link-btn', onclick: () => setEditing(true) }, 'Изменить'));
+    canEditSpace(role, ownId, student) && h('button', { class: 'link-btn', onclick: () => setEditing(true) }, 'Изменить'));
   function setEditing(on) {
+    if (on && !canEditSpace(role, ownId, student)) return;
     openEditor = on ? editorKey : null;
     editBox.hidden = !on;
     links.hidden = on;
@@ -470,7 +540,7 @@ function songCard(song, student, { owner = false, heading = 'h2' } = {}) {
     }
   }
 
-  const card = h('article', { class: 'song' + (role === 'student' && !song.meta.impulse ? ' needs-impulse' : ''), 'data-song-id': `${student.id}|${song.key}` },
+  const card = h('article', { class: 'song' + (role === 'student' && canEditSpace(role, ownId, student) && !song.meta.impulse ? ' needs-impulse' : ''), 'data-song-id': `${student.id}|${song.key}` },
     h('div', { class: 'song-head' },
       h(heading, {}, song.title),
       isNew(song.modified) ? h('span', { class: 'badge' }, 'новое') : null,
@@ -482,7 +552,7 @@ function songCard(song, student, { owner = false, heading = 'h2' } = {}) {
           class: `chip ${v.kind}`, 'data-id': `${student.id}|${v.file.name}`,
           onclick: () => player.play(song, v, student),
         }, h('span', { class: 'variant-label' }, variantName(v)), h('span', { class: 'variant-help' }, variantHelp(v)))))
-      : h('p', { class: 'muted' }, 'Нет аудио — добавьте вариант в «Изменить».'),
+      : h('p', { class: 'muted' }, canEditSpace(role, ownId, student) ? 'Нет аудио — добавьте вариант в «Изменить».' : 'Преподаватель ещё не добавил аудиозапись.'),
     h('div', { class: 'song-wave', hidden: true }, h('canvas', { class: 'waveform-canvas', role: 'img', 'aria-label': `Волновая форма: ${song.title}` })),
     song.meta.notes ? h('div', { class: 'notes' }, h('div', { class: 'pane-title' }, 'Заметки'), song.meta.notes) : null,
     links, reading, editBox);
@@ -749,7 +819,7 @@ function songEditor(song, student, { onClose, isNew = false }) {
     openEditor = failed ? `${folder}|${songKey(newTitle)}` : null;
     if (isNew && !failed) onClose();
     if (!failed && parseRoute(location.hash)?.song && songKey(newTitle) !== song.key) {
-      history.replaceState(null, '', songPath(role, libraryKey, folder, songKey(newTitle)));
+      history.replaceState(null, '', songPath(role, libraryKey, folder, songKey(newTitle), ownId));
     }
     await mutate(async () => {}, failed ? null : 'Сохранено');
   }

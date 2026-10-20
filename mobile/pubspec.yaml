@@ -1,7 +1,7 @@
 name: songs
 description: 'Сад звука — песни и материалы для занятий вокалом.'
 publish_to: 'none'
-version: 0.1.2+3
+version: 0.2.0+4
 environment:
   sdk: ^3.13.5
 dependencies:

@@ -136,6 +136,12 @@ void main() {
     expect(find.text('Плюс'), findsOneWidget);
     expect(find.text('Because I am happy'), findsOneWidget);
     expect(find.text('Счастье'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('Мягкое начало'),
+      150,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
     expect(find.text('Мягкое начало'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
     api.close();

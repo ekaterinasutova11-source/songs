@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {parseRoute, studentPath, songPath} from '../navigation.js';
+import {parseRoute, studentPath, songPath, selectStudentSpace, canEditSpace} from '../navigation.js';
 
 test('existing pupil and teacher links still open the repertoire', () => {
   assert.deepEqual(parseRoute('#/s/abcdefgh1234'),{mode:'s',key:'abcdefgh1234',folder:null,song:null});
@@ -23,4 +23,32 @@ test('teacher archive has a reloadable route without changing existing pupil lin
   assert.deepEqual(parseRoute('#/t/abcdefgh1234/archive'),{mode:'t',key:'abcdefgh1234',folder:null,song:null,archive:true});
   assert.equal(parseRoute('#/s/abcdefgh1234/archive'),null);
   assert.equal(parseRoute('#/t/short/archive'),null);
+});
+
+test('personal links stay unchanged while shared space songs round trip', () => {
+  const own = 'individual:id', group = 'дуэт / лето', key = 'abcdefgh1234';
+  assert.equal(studentPath('student', key, own, own), `#/s/${key}`);
+  assert.equal(songPath('student', key, own, 'Песня', own), `#/s/${key}/song/${encodeURIComponent('Песня')}`);
+  assert.deepEqual(parseRoute(songPath('student', key, group, 'Песня / 1', own)),
+    {mode: 's', key, folder: group, song: 'Песня / 1'});
+  assert.equal(parseRoute('#/s/abcdefgh1234/space/%ZZ'), null);
+  assert.equal(parseRoute('#/t/abcdefgh1234/space/duet'), null);
+});
+
+test('a route selects only an authorized returned space, never another pupil or first group', () => {
+  const own = {id: 'own', kind: 'individual'}, group = {id: 'group', kind: 'duet'};
+  const spaces = [group, own];
+  assert.equal(selectStudentSpace(spaces, 'own'), own);
+  assert.equal(selectStudentSpace(spaces, 'own', 'group'), group);
+  assert.equal(selectStudentSpace(spaces, 'own', 'other-personal'), null);
+  assert.equal(selectStudentSpace([group], 'own'), null);
+});
+
+test('group members get no editing controls, own personal editing remains', () => {
+  const own = {id: 'own', kind: 'individual'}, group = {id: 'group', kind: 'ensemble'};
+  assert.equal(canEditSpace('student', 'own', own), true);
+  assert.equal(canEditSpace('student', 'own', group), false);
+  assert.equal(canEditSpace('student', 'group', group), false);
+  assert.equal(canEditSpace('student', 'other', own), false);
+  assert.equal(canEditSpace('teacher', null, group), true);
 });

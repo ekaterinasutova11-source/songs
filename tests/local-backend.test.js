@@ -23,6 +23,76 @@ async function fixture(readOnly=false) {
   const close=async()=>{app.server.closeAllConnections();await new Promise(resolve=>app.server.close(resolve));app.store.close();fs.rmSync(directory,{recursive:true,force:true});};
   return {...app,directory,base,request,signed,close};
 }
+
+test('direct shared memberships expose only own and assigned groups; legacy links stay scoped',async()=>{
+  const app=await fixture();
+  try {
+    for(const id of ['g','h'])app.store.db.prepare('INSERT INTO folders(id,name,key) VALUES(?,?,?)').run(id,id,'key-'+id);
+    app.store.transaction(()=>app.store.saveFile('g','shared.mp3',app.store.putBytes(Buffer.from('group bytes'))));
+    assert.equal((await app.request('setSpaceMembers',{folder:'g',kind:'duet',members:['a','b']})).status,200);
+    assert.equal((await app.request('setSpaceMembers',{folder:'h',kind:'ensemble',members:['a']})).status,200);
+    const a=(await app.request('library',{includeSpaces:true},'pupil-a')).data;
+    assert.equal(a.ownId,'a');assert.deepEqual(a.students.map(s=>s.id),['a','g','h']);
+    for(const row of a.students){assert.equal(row.key,undefined);assert.equal(row.members,undefined);}
+    assert.deepEqual((await app.request('library',{},'pupil-a')).data.students.map(s=>s.id),['a']);
+    assert.deepEqual((await app.request('library',{includeSpaces:true},'key-g')).data.students.map(s=>s.id),['g']);
+    assert.equal((await app.request('saveMeta',{folder:'g',song:'x',patch:{notes:'bad'}},'key-g')).status,403);
+    assert.deepEqual((await app.request('library',{includeSpaces:true},'pupil-b')).data.students.map(s=>s.id),['b','g']);
+    const media=await app.request('url',{folder:'g',name:'shared.mp3'},'pupil-a');
+    assert.equal(media.status,200);assert.equal(await(await fetch(app.signed(media.data.href))).text(),'group bytes');
+    for(const action of ['uploadUrl','saveText','saveMeta','rename','delete']) {
+      assert.equal((await app.request(action,{folder:'g',name:'shared.mp3',song:'x',patch:{notes:'bad'}},'pupil-a')).status,403);
+    }
+    assert.equal((await app.request('url',{folder:'b',name:'secret.txt'},'pupil-a')).status,403);
+    assert.equal((await app.request('url',{folder:'h',name:'secret.txt'},'pupil-b')).status,403);
+    assert.equal((await app.request('setSpaceMembers',{folder:'g',kind:'duet',members:[]},'pupil-a')).status,403);
+    assert.deepEqual(app.store.members('g'),['a','b']);
+  } finally {await app.close();}
+});
+
+test('removal, member archive and group archive revoke issued tickets without reviving them',async()=>{
+  const app=await fixture();
+  try {
+    app.store.db.prepare('INSERT INTO folders(id,name,key) VALUES(?,?,?)').run('g','group','key-group');
+    app.store.transaction(()=>app.store.saveFile('g','s.mp3',app.store.putBytes(Buffer.from('shared'))));
+    const set=members=>app.request('setSpaceMembers',{folder:'g',kind:'ensemble',members});
+    const ticket=async()=>app.signed((await app.request('url',{folder:'g',name:'s.mp3'},'pupil-a')).data.href);
+    await set(['a']);const original=await ticket();assert.equal((await fetch(original)).status,200);
+    await set([]);assert.equal((await fetch(original)).status,403);
+    await set(['a']);assert.equal((await fetch(original)).status,403);
+    const beforeMemberArchive=await ticket();await app.request('archiveStudent',{folder:'a'});
+    assert.equal((await fetch(beforeMemberArchive)).status,403);
+    assert.equal((await app.request('library',{includeSpaces:true},'pupil-a')).status,403);
+    await app.request('restoreStudent',{folder:'a'});assert.equal(app.store.folder('a').key,'pupil-a');
+    assert.equal((await fetch(beforeMemberArchive)).status,403);
+    const beforeGroupArchive=await ticket();await app.request('archiveStudent',{folder:'g'});
+    assert.equal((await fetch(beforeGroupArchive)).status,403);
+    assert.deepEqual((await app.request('library',{includeSpaces:true},'pupil-a')).data.students.map(s=>s.id),['a']);
+    await app.request('restoreStudent',{folder:'g'});assert.equal((await fetch(beforeGroupArchive)).status,403);
+    assert.equal((await fetch(await ticket())).status,200);
+    assert.equal(app.store.folder('g').key,'key-group');
+    assert.equal(fs.readFileSync(app.store.blobPath(app.store.file('g','s.mp3').blob),'utf8'),'shared');
+  } finally {await app.close();}
+});
+
+test('membership migration is additive, validates direct members, and survives backup/reopen',async()=>{
+  const app=await fixture();
+  try {
+    app.store.db.prepare('INSERT INTO folders(id,name,key) VALUES(?,?,?)').run('g','group','key-group');
+    assert.equal((await app.request('setSpaceMembers',{folder:'g',kind:'duet',members:['a']})).status,200);
+    for(const params of [{kind:'bad',members:['b']},{kind:'duet',members:['g']},{kind:'duet',members:['a','a']},{kind:'duet',members:['missing']}]) {
+      assert.notEqual((await app.request('setSpaceMembers',{folder:'g',...params})).status,200);
+      assert.deepEqual(app.store.members('g'),['a']);
+    }
+    assert.equal((await app.request('setSpaceMembers',{folder:'b',kind:'ensemble',members:['g']})).status,400);
+    const snapshot=path.join(app.directory,'membership-backup.sqlite');
+    app.store.db.exec("VACUUM INTO '"+snapshot.replaceAll("'","''")+"'");
+    const backup=new DatabaseSync(snapshot);
+    assert.equal(backup.prepare('SELECT member FROM space_memberships WHERE space=?').get('g').member,'a');backup.close();
+    const reopened=new Store(app.directory);assert.deepEqual(reopened.members('g'),['a']);
+    assert.equal(reopened.folder('a').key,'pupil-a');assert.equal(reopened.folder('g').kind,'duet');reopened.close();
+  } finally {await app.close();}
+});
 test('access isolation, CORS and service-file protection',async()=>{
   const app=await fixture();
   try {

@@ -37,6 +37,10 @@ export class Store {
       const columns = new Set(this.db.prepare('PRAGMA table_info(folders)').all().map(c => c.name));
       if (!columns.has('archived_at')) this.db.exec('ALTER TABLE folders ADD COLUMN archived_at TEXT');
       if (!columns.has('access_version')) this.db.exec('ALTER TABLE folders ADD COLUMN access_version INTEGER NOT NULL DEFAULT 0');
+      if (!columns.has('kind')) this.db.exec("ALTER TABLE folders ADD COLUMN kind TEXT NOT NULL DEFAULT 'individual'");
+      this.db.exec(`CREATE TABLE IF NOT EXISTS space_memberships(
+        space TEXT NOT NULL REFERENCES folders(id),member TEXT NOT NULL REFERENCES folders(id),
+        PRIMARY KEY(space,member),CHECK(space<>member));`);
     });
   }
   transaction(fn) {
@@ -67,6 +71,37 @@ export class Store {
     const item = this.db.prepare('SELECT * FROM folders WHERE id=? AND deleted=0').get(id);
     if (!item) throw new HttpError(403, 'Нет доступа к этой папке');
     return item;
+  }
+  members(space) {
+    return this.db.prepare('SELECT member FROM space_memberships WHERE space=? ORDER BY member').all(space).map(row => row.member);
+  }
+  canReadSpace(member, space) {
+    if (member === space) return true;
+    return !!this.db.prepare(`SELECT 1 FROM space_memberships m JOIN folders f ON f.id=m.space
+      WHERE m.member=? AND m.space=? AND f.deleted=0 AND f.archived_at IS NULL AND f.kind IN ('duet','ensemble')`).get(member, space);
+  }
+  accessibleSpaces(member) {
+    return this.folders().filter(folder => this.canReadSpace(member, folder.id));
+  }
+  setMembers(space, kind, members) {
+    if (!['duet','ensemble'].includes(kind) || !Array.isArray(members) || members.length > 100 ||
+      members.some(id => typeof id !== 'string') || new Set(members).size !== members.length) throw new HttpError(400, 'Некорректные участники');
+    const target = this.folder(space);
+    for (const id of members) {
+      const member = this.folder(id);
+      if (id === space || member.kind !== 'individual') throw new HttpError(400, 'Участником должен быть отдельный ученик');
+    }
+    const before = this.members(space), next = new Set(members), previous = new Set(before);
+    // Converting a principal which already joins another space into a group
+    // would make indirect access ambiguous; keep membership strictly direct.
+    if (this.db.prepare('SELECT 1 FROM space_memberships WHERE member=?').get(space)) throw new HttpError(400, 'Это пространство уже является участником группы');
+    this.audit('space-members', {space, kind, previousKind: target.kind, before, members});
+    this.db.prepare('UPDATE folders SET kind=? WHERE id=?').run(kind, space);
+    this.db.prepare('DELETE FROM space_memberships WHERE space=?').run(space);
+    for (const member of members) this.db.prepare('INSERT INTO space_memberships(space,member) VALUES(?,?)').run(space, member);
+    for (const id of new Set([...before, ...members])) {
+      if (previous.has(id) !== next.has(id)) this.db.prepare('UPDATE folders SET access_version=access_version+1 WHERE id=?').run(id);
+    }
   }
   file(folder, name) {
     const file = this.db.prepare('SELECT * FROM files WHERE folder=? AND name=? AND deleted=0').get(folder, existingName(name));

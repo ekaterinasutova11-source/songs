@@ -45,16 +45,18 @@ class Session {
         return Session(key: archive[1]!, mode: 't', archive: true);
       }
       final match = RegExp(
-        r'^([ts])/([\w-]{8,})(?:/s/([^/]+))?(?:/song/([^/]+))?$',
+        r'^([ts])/([\w-]{8,})(?:/(s|space)/([^/]+))?(?:/song/([^/]+))?$',
       ).firstMatch(route);
-      if (match == null || (match[1] == 's' && match[3] != null)) {
+      if (match == null ||
+          (match[1] == 's' && match[3] == 's') ||
+          (match[1] == 't' && match[3] == 'space')) {
         throw const FormatException(message);
       }
       return Session(
         key: match[2]!,
         mode: match[1]!,
-        folder: match[3] == null ? null : Uri.decodeComponent(match[3]!),
-        song: match[4] == null ? null : Uri.decodeComponent(match[4]!),
+        folder: match[4] == null ? null : Uri.decodeComponent(match[4]!),
+        song: match[5] == null ? null : Uri.decodeComponent(match[5]!),
       );
     } catch (_) {
       throw const FormatException(message);
@@ -78,7 +80,7 @@ class Session {
         (mode != 't' && mode != 's') ||
         (folder != null && folder is! String) ||
         (song != null && song is! String) ||
-        (mode == 's' && (folder != null || json['archive'] == true))) {
+        (mode == 's' && json['archive'] == true)) {
       throw const FormatException('Сохранённая ссылка недействительна.');
     }
     return Session(
@@ -264,12 +266,19 @@ class Student {
   Student({
     required this.id,
     required this.name,
+    this.kind = 'individual',
     this.archivedAt,
     this.files = const [],
     this.meta = const {},
   }) : songs = groupSongs(files, meta: meta);
   final String id;
   final String name;
+  final String kind;
+  String get kindLabel => switch (kind) {
+    'duet' => 'Дуэт',
+    'ensemble' => 'Ансамбль',
+    _ => 'Личное',
+  };
   final String? archivedAt;
   final List<SongFile> files;
   final Map<String, dynamic> meta;
@@ -278,6 +287,7 @@ class Student {
   factory Student.fromJson(Map<String, dynamic> json) => Student(
     id: json['id'] as String,
     name: json['name'] as String,
+    kind: json['kind'] as String? ?? 'individual',
     archivedAt: json['archivedAt'] as String?,
     files: (json['files'] as List? ?? [])
         .map(
@@ -289,11 +299,14 @@ class Student {
 }
 
 class Library {
-  const Library({required this.role, required this.students});
+  const Library({required this.role, required this.students, this.ownId});
   final String role;
   final List<Student> students;
+  final String? ownId;
+  String? get personalSpaceId => ownId ?? students.firstOrNull?.id;
   factory Library.fromJson(Map<String, dynamic> json) => Library(
     role: json['role'] as String,
+    ownId: json['ownId'] as String?,
     students: (json['students'] as List)
         .map(
           (student) =>
@@ -365,12 +378,26 @@ class SongsApi {
   }
 
   Future<Library> library(Session session) async {
-    final json = await _call(session, 'library');
+    final json = await _call(session, 'library', {'includeSpaces': true});
     try {
       final library = Library.fromJson(json);
-      if (library.role != (session.isTeacher ? 'teacher' : 'student') ||
-          (!session.isTeacher && library.students.length != 1)) {
+      if (library.role != (session.isTeacher ? 'teacher' : 'student')) {
         throw const FormatException();
+      }
+      if (!session.isTeacher) {
+        final ownId = library.personalSpaceId;
+        if (library.students.isEmpty ||
+            (library.students.length > 1 && library.ownId == null) ||
+            !library.students.any((space) => space.id == ownId) ||
+            library.students.map((space) => space.id).toSet().length !=
+                library.students.length ||
+            library.students.any(
+              (space) =>
+                  !['individual', 'duet', 'ensemble'].contains(space.kind) ||
+                  (space.kind == 'individual' && space.id != ownId),
+            )) {
+          throw const FormatException();
+        }
       }
       return library;
     } catch (_) {

@@ -47,7 +47,7 @@ void main() {
     );
     test('invalid stored sessions fail without exposing secret values', () {
       expect(
-        () => Session.fromJson({'mode': 's', 'key': key, 'folder': 'other'}),
+        () => Session.fromJson({'mode': 's', 'key': key, 'archive': true}),
         throwsFormatException,
       );
       try {

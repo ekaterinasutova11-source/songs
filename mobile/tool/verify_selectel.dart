@@ -28,10 +28,10 @@ Future<void> main() async {
         .firstWhere((s) => activeIds.contains(s['id']));
     final session = Session(key: pupil['key'] as String, mode: 's');
     final own = await api.library(session);
-    if (own.students.length != 1 || own.students.single.id != pupil['id']) {
+    if (own.personalSpaceId != pupil['id']) {
       throw const FormatException();
     }
-    final student = own.students.single;
+    final student = own.students.firstWhere((s) => s.id == own.personalSpaceId);
     final song = student.songs.firstWhere((s) => s.variants.isNotEmpty);
     final uri = await api.mediaUrl(
       session,
