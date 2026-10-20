@@ -1,7 +1,7 @@
 name: songs
 description: 'Сад звука — песни и материалы для занятий вокалом.'
 publish_to: 'none'
-version: 0.1.0+1
+version: 0.1.1+2
 environment:
   sdk: ^3.13.5
 dependencies:
@@ -12,6 +12,7 @@ dependencies:
   just_audio_background: ^0.0.1-beta.17
   flutter_secure_storage: ^11.2.0
   unorm_dart: ^0.3.3
+  path_provider: ^2.1.6
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -19,6 +20,7 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
+    - assets/brand/
     - assets/fonts/manrope-OFL.txt
     - assets/fonts/cormorantgaramond-OFL.txt
   fonts:

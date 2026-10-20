@@ -1,0 +1,74 @@
+[
+  {
+    "input": "**сильный** и *мягкий*",
+    "html": "<b>сильный</b> и <i>мягкий</i>"
+  },
+  {
+    "input": "__слово__ ==внимание==",
+    "html": "<u>слово</u> <mark>внимание</mark>"
+  },
+  {
+    "input": "[red]красный[/red] [blue]синий[/blue]",
+    "html": "<span class=\"c-red\">красный</span> <span class=\"c-blue\">синий</span>"
+  },
+  {
+    "input": "[green]зелёный[/green] [purple]сиреневый[/purple]",
+    "html": "<span class=\"c-green\">зелёный</span> <span class=\"c-purple\">сиреневый</span>"
+  },
+  {
+    "input": "**жирный *курсив* текст**",
+    "html": "<b>жирный </b><b><i>курсив</i></b><b> текст</b>"
+  },
+  {
+    "input": "2*3 и * * *",
+    "html": "2*3 и * * *"
+  },
+  {
+    "input": "непарный ** знак",
+    "html": "непарный ** знак"
+  },
+  {
+    "input": "\\*буквально\\*",
+    "html": "*буквально*"
+  },
+  {
+    "input": "<script>текст & \"знак\"</script>",
+    "html": "&lt;script&gt;текст &amp; &quot;знак&quot;&lt;/script&gt;"
+  },
+  {
+    "input": "строка\n\nследующая строка",
+    "html": "строка\n\nследующая строка"
+  },
+  {
+    "input": "[red]a[blue]b[/red]c[/blue]",
+    "html": "<span class=\"c-red\">a</span><span class=\"c-blue\">b[/red]c</span>"
+  },
+  {
+    "input": "==слово с пробелом==",
+    "html": "<mark>слово с пробелом</mark>"
+  },
+  {
+    "input": "== ==",
+    "html": "== =="
+  },
+  {
+    "input": "[rgb]неизвестная разметка[/rgb]",
+    "html": "[rgb]неизвестная разметка[/rgb]"
+  },
+  {
+    "input": "**__==совместно==__**",
+    "html": "<mark><u><b>совместно</b></u></mark>"
+  },
+  {
+    "input": "до **середина** после",
+    "html": "до <b>середина</b> после"
+  },
+  {
+    "input": "[red]==маркер==[/red]",
+    "html": "<span class=\"c-red\"><mark>маркер</mark></span>"
+  },
+  {
+    "input": "конец\\",
+    "html": "конец\\"
+  }
+]

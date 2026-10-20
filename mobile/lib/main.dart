@@ -7,6 +7,8 @@ import 'package:just_audio_background/just_audio_background.dart';
 
 import 'data.dart';
 import 'player.dart';
+import 'brand.dart';
+import 'lyrics.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -14,6 +16,7 @@ Future<void> main() async {
     androidNotificationChannelId: 'ru.sadzvuka.songs.audio',
     androidNotificationChannelName: 'Музыка для занятий',
     androidNotificationOngoing: true,
+    androidNotificationIcon: 'drawable/ic_stat_songs',
   );
   runApp(const SongsApp());
 }
@@ -58,37 +61,11 @@ class SongsApp extends StatelessWidget {
   final SessionStore? store;
   @override
   Widget build(BuildContext context) {
-    final colors = ColorScheme.fromSeed(
-      seedColor: const Color(0xff8176a7),
-      surface: const Color(0xfffaf8fc),
-    );
     return MaterialApp(
       title: 'Сад звука',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: colors,
-        scaffoldBackgroundColor: colors.surface,
-        fontFamily: 'Manrope',
-        textTheme: const TextTheme(
-          headlineLarge: TextStyle(fontFamily: 'Cormorant', fontSize: 40),
-        ),
-        appBarTheme: AppBarTheme(
-          backgroundColor: colors.surface,
-          centerTitle: false,
-        ),
-        inputDecorationTheme: const InputDecorationTheme(
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.all(Radius.circular(16)),
-          ),
-        ),
-        cardTheme: const CardThemeData(
-          elevation: 0,
-          margin: EdgeInsets.only(bottom: 12),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.all(Radius.circular(20)),
-          ),
-        ),
-      ),
+      theme: gardenTheme(Brightness.light),
+      darkTheme: gardenTheme(Brightness.dark),
       home: LibraryHome(api: api, store: store),
     );
   }
@@ -385,7 +362,22 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
       child: Scaffold(
         appBar: AppBar(
           leading: canBack ? BackButton(onPressed: _back) : null,
-          title: const Text('Сад звука'),
+          titleSpacing: canBack ? 0 : 20,
+          title: Row(
+            children: [
+              const GardenMark(size: 27),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  'Сад звука',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.headlineMedium
+                      ?.copyWith(fontSize: 27),
+                ),
+              ),
+            ],
+          ),
           actions: [
             if (_session != null) ...[
               IconButton(
@@ -423,7 +415,14 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
                     Expanded(
                       child: _song == null ? _libraryView() : _songView(_song!),
                     ),
-                    SongsPlayer(controller: _player),
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight: MediaQuery.sizeOf(context).height * .46,
+                      ),
+                      child: SingleChildScrollView(
+                        child: SongsPlayer(controller: _player),
+                      ),
+                    ),
                   ],
                 ),
         ),
@@ -439,7 +438,7 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Icon(Icons.spa_outlined, size: 56, color: Color(0xff8176a7)),
+            const Center(child: GardenMark(size: 72)),
             const SizedBox(height: 20),
             Text(
               'Место, где растёт\nтвой голос',
@@ -542,6 +541,8 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
         physics: const AlwaysScrollableScrollPhysics(),
         children: [
+          _eyebrow(student == null ? 'КАБИНЕТ ПРЕПОДАВАТЕЛЯ' : 'МОЙ РЕПЕРТУАР'),
+          const SizedBox(height: 10),
           Text(
             student?.name ?? 'Пространства учеников',
             style: Theme.of(context).textTheme.headlineLarge,
@@ -590,8 +591,29 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
                     horizontal: 18,
                     vertical: 10,
                   ),
-                  leading: const Icon(Icons.music_note_outlined),
-                  title: Text(song.title),
+                  leading: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.primaryContainer,
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(20),
+                        topRight: Radius.circular(20),
+                        bottomLeft: Radius.circular(20),
+                        bottomRight: Radius.circular(6),
+                      ),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Icon(
+                        Icons.music_note_outlined,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                  ),
+                  title: Text(
+                    song.title,
+                    style: Theme.of(context).textTheme.headlineMedium
+                        ?.copyWith(fontSize: 26),
+                  ),
                   subtitle: Text(
                     '${song.variants.length} аудиодорожек${song.lyricsFile != null ? ' · есть текст' : ''}',
                   ),
@@ -635,24 +657,11 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
   Widget _songView(Song song) => ListView(
     padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
     children: [
-      Text(_student?.name ?? '', style: Theme.of(context).textTheme.labelLarge),
+      _eyebrow(_student?.name ?? ''),
       const SizedBox(height: 8),
       Text(song.title, style: Theme.of(context).textTheme.headlineLarge),
       const SizedBox(height: 20),
-      for (final variant in song.variants)
-        Card(
-          child: ListTile(
-            leading: const Icon(Icons.play_circle_outline),
-            title: Text(variant.displayName),
-            onTap: () => _player.playVariant(
-              _api,
-              _session!,
-              _student!.id,
-              song,
-              variant,
-            ),
-          ),
-        ),
+      for (final variant in song.variants) _variantTile(song, variant),
       if (song.variants.isEmpty)
         const Text('Для этой песни пока добавлен только текст.'),
       if (_lyricsLoading)
@@ -660,17 +669,62 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
           padding: EdgeInsets.all(20),
           child: Center(child: CircularProgressIndicator()),
         ),
-      if (_lyrics != null) _textCard('Текст песни', _lyrics!),
+      if (_lyrics != null) _textCard('Текст песни', _lyrics!, formatted: true),
       for (final entry in {
         'translation': 'Перевод',
         'notes': 'Заметки',
         'impulse': 'Импульс',
       }.entries)
         if ((song.meta[entry.key] ?? '').toString().trim().isNotEmpty)
-          _textCard(entry.value, song.meta[entry.key].toString()),
+          _textCard(
+            entry.value,
+            song.meta[entry.key].toString(),
+            formatted: entry.key == 'translation',
+          ),
     ],
   );
-  Widget _textCard(String title, String text) => Card(
+  Widget _eyebrow(String text) => Text(
+    text.toUpperCase(),
+    style: TextStyle(
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+      letterSpacing: 1.4,
+      fontSize: 10,
+      fontWeight: FontWeight.w700,
+    ),
+  );
+
+  Widget _variantTile(Song song, AudioVariant variant) {
+    final palette = variantPalette(variant.kind, Theme.of(context).brightness);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Material(
+        color: palette.fill,
+        borderRadius: BorderRadius.circular(14),
+        child: ListTile(
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 4,
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+          leading: Icon(
+            Icons.play_circle_outline,
+            color: palette.ink,
+            size: 30,
+          ),
+          title: Text(
+            variant.displayName,
+            style: TextStyle(color: palette.ink, fontWeight: FontWeight.w600),
+          ),
+          onTap: () =>
+              _player.playVariant(_api, _session!, _student!.id, song, variant),
+        ),
+      ),
+    );
+  }
+
+  Widget _textCard(String title, String text, {bool formatted = false}) => Card(
     child: Padding(
       padding: const EdgeInsets.all(20),
       child: Column(
@@ -678,10 +732,13 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
         children: [
           Text(title, style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 12),
-          SelectableText(
-            text,
-            style: const TextStyle(height: 1.7, fontSize: 16),
-          ),
+          if (formatted)
+            FormattedLyrics(text)
+          else
+            SelectableText(
+              text,
+              style: const TextStyle(height: 1.7, fontSize: 16),
+            ),
         ],
       ),
     ),

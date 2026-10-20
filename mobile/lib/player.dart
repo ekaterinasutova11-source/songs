@@ -5,6 +5,7 @@ import 'package:just_audio/just_audio.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 
 import 'data.dart';
+import 'brand.dart';
 
 /// A seek never escapes the known duration, including a backwards skip at zero.
 Duration boundedSeek(Duration requested, Duration total) {
@@ -145,6 +146,8 @@ class PlayerController extends ChangeNotifier {
       if (!_current(generation)) return;
       final uri = await api.mediaUrl(session, folder, variant.file.name);
       if (!_current(generation)) return;
+      final artwork = await gardenArtworkUri();
+      if (!_current(generation)) return;
       await _serialize(() async {
         if (!_current(generation)) return;
         final player = _player();
@@ -157,6 +160,7 @@ class PlayerController extends ChangeNotifier {
               title: song.title,
               artist: variant.displayName,
               album: 'Сад звука',
+              artUri: artwork,
             ),
           ),
         );
@@ -328,11 +332,41 @@ class _SongsPlayerState extends State<SongsPlayer> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                player.songTitle!,
-                style: Theme.of(context).textTheme.titleMedium,
+              Row(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Image.asset(
+                      'assets/brand/cover.png',
+                      width: 48,
+                      height: 48,
+                      excludeFromSemantics: true,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          player.songTitle!,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        Text(
+                          player.variantName ?? '',
+                          style: TextStyle(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
-              Text(player.variantName ?? ''),
               if (player.isLoading) const LinearProgressIndicator(),
               if (player.error != null) ...[
                 Text(
