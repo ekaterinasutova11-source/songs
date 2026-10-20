@@ -81,14 +81,14 @@ ThemeData gardenTheme(Brightness brightness) {
     scaffoldBackgroundColor: bg,
     textTheme: base.textTheme.copyWith(
       headlineLarge: TextStyle(
-        fontFamily: 'Cormorant',
+        fontFamily: 'Lora',
         fontWeight: FontWeight.w500,
         fontSize: 42,
         height: 1.08,
         color: ink,
       ),
       headlineMedium: TextStyle(
-        fontFamily: 'Cormorant',
+        fontFamily: 'Lora',
         fontWeight: FontWeight.w500,
         fontSize: 30,
         color: ink,

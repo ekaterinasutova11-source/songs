@@ -352,7 +352,12 @@ class _SongsPlayerState extends State<SongsPlayer> {
                           player.songTitle!,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.titleMedium,
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(
+                                fontFamily: 'Lora',
+                                fontSize: 18,
+                                fontWeight: FontWeight.w500,
+                              ),
                         ),
                         Text(
                           player.variantName ?? '',

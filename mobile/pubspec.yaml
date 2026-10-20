@@ -1,7 +1,7 @@
 name: songs
 description: 'Сад звука — песни и материалы для занятий вокалом.'
 publish_to: 'none'
-version: 0.1.1+2
+version: 0.1.2+3
 environment:
   sdk: ^3.13.5
 dependencies:
@@ -23,7 +23,12 @@ flutter:
     - assets/brand/
     - assets/fonts/manrope-OFL.txt
     - assets/fonts/cormorantgaramond-OFL.txt
+    - assets/fonts/lora-OFL.txt
   fonts:
+    - family: Lora
+      fonts:
+        - asset: assets/fonts/lora-variable.ttf
+          weight: 500
     - family: Manrope
       fonts:
         - asset: assets/fonts/a13d9b41b0a471ce58f0.ttf

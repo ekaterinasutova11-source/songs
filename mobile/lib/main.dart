@@ -373,7 +373,7 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.headlineMedium
-                      ?.copyWith(fontSize: 27),
+                      ?.copyWith(fontFamily: 'Cormorant', fontSize: 27),
                 ),
               ),
             ],
@@ -443,7 +443,8 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
             Text(
               'Место, где растёт\nтвой голос',
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.headlineLarge,
+              style: Theme.of(context).textTheme.headlineLarge
+                  ?.copyWith(fontFamily: 'Cormorant'),
             ),
             const SizedBox(height: 16),
             const Text(
@@ -639,7 +640,11 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
                       item.name.isEmpty ? '♪' : item.name.characters.first,
                     ),
                   ),
-                  title: Text(item.name),
+                  title: Text(
+                    item.name,
+                    style: Theme.of(context).textTheme.headlineMedium
+                        ?.copyWith(fontSize: 19),
+                  ),
                   subtitle: Text('${item.songs.length} песен'),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => setState(() {

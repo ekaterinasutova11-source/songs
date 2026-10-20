@@ -35,6 +35,7 @@ void main() {
       for (final font in {
         'Manrope': 'assets/fonts/a13d9b41b0a471ce58f0.ttf',
         'Cormorant': 'assets/fonts/1724047c8988ca5155bf.ttf',
+        'Lora': 'assets/fonts/lora-variable.ttf',
         'MaterialIcons': 'fonts/MaterialIcons-Regular.otf',
       }.entries) {
         await (FontLoader(
