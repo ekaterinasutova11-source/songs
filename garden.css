@@ -47,6 +47,13 @@ h1 { font: 500 clamp(38px, 5.5vw, 56px)/1.08 'Cormorant Garamond', Georgia, seri
 .student-actions { margin-top: 14px; gap: 8px; }
 .badge { font-size: 10px; font-weight: 600; }
 .hint { font-size: 11px; margin-top: 26px; max-width: 650px; }
+.archive-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 18px; }
+.archive-tabs [aria-pressed="true"] { border-color: var(--accent); background: var(--surface-2); color: var(--accent); }
+.archive-notice { padding: 14px 16px; margin: 0 0 20px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 14px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.archive-dialog { width: min(460px, calc(100% - 32px)); max-height: calc(100dvh - 32px); overflow: auto; padding: 24px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.archive-dialog::backdrop { background: rgb(0 0 0 / 45%); }
+.archive-dialog h2 { margin: 0 0 12px; font-size: 22px; }
+.archive-dialog p { font-size: 14px; line-height: 1.7; margin: 0 0 20px; }
 .songs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; align-items: start; }
 .song { min-width: 0; padding: 23px; border-radius: 22px; transition: border-color .2s; }
 .song:has(.reading:not([hidden])), .song:has(.editor:not([hidden])) { grid-column: 1 / -1; }

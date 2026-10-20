@@ -10,7 +10,9 @@ http.createServer((req,res)=>{
   const route=url.pathname.replace(/^\/legacy/,'');
   const base=legacy?'https://ekaterinasutova11-source.github.io/songs/':'https://135.106.183.211/';
   let fragment;
-  if(route==='/teacher')fragment='#/t/'+teacher;
+  if(route==='/archive-student')fragment='#/s/'+JSON.parse(fs.readFileSync('secrets/archive-test/pupil.json')).key;
+  else if(route==='/teacher')fragment='#/t/'+teacher;
+  else if(route==='/teacher-archive')fragment='#/t/'+teacher+'/archive';
   else if(/^\/student\/\d+$/.test(route)){const key=keys[Number(route.split('/').pop())];if(key)fragment='#/s/'+key;}
   if(!fragment){res.writeHead(404).end();return;}
   res.writeHead(302,{'Location':base+fragment,'Cache-Control':'no-store'}).end();

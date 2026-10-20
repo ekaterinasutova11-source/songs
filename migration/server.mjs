@@ -23,8 +23,9 @@ export function createApp({ directory, teacherKey, signingKey, baseUrl, readOnly
   function authenticate(key) {
     if (typeof key !== 'string' || !key) throw new HttpError(401, 'Нет ключа доступа');
     if (safeEqual(key, teacherKey)) return { teacher: true, principal: digest(teacherKey) };
-    const own = store.folders().find(f => safeEqual(f.key, key));
+    const own = store.folders({ includeArchived: true }).find(f => safeEqual(f.key, key));
     if (!own) throw new HttpError(403, 'Ссылка устарела или неверна — попросите новую у преподавателя');
+    if (own.archived_at) throw new HttpError(403, 'Преподаватель закрыл доступ к этой странице. Материалы сохранены; доступ можно восстановить.');
     return { teacher: false, own, principal: digest(key) };
   }
   function folderFor(auth, id) {
@@ -45,21 +46,26 @@ export function createApp({ directory, teacherKey, signingKey, baseUrl, readOnly
     try { payload = JSON.parse(Buffer.from(data, 'base64url').toString()); } catch { throw new HttpError(403, 'Неверная ссылка'); }
     if (payload.purpose !== purpose || payload.expires < Date.now()) throw new HttpError(403, 'Ссылка истекла — откройте файл заново');
     const folder = store.folder(payload.folder);
-    if (!safeEqual(payload.principal, digest(teacherKey)) && !safeEqual(payload.principal, digest(folder.key))) throw new HttpError(403, 'Доступ отозван');
+    if (!safeEqual(payload.principal, digest(teacherKey)) && (
+      folder.archived_at || !safeEqual(payload.principal, digest(folder.key)) ||
+      (payload.accessVersion ?? 0) !== folder.access_version
+    )) throw new HttpError(403, 'Доступ отозван');
     return payload;
   }
   function handle(body) {
     const auth = authenticate(body.key), action = body.action;
     if (action === 'library') {
-      const folders = auth.teacher ? store.folders() : [auth.own];
-      return { role: auth.teacher ? 'teacher' : 'student', students: folders.map(f => ({ id: f.id, name: f.name, ...(auth.teacher ? { key: f.key } : {}), ...store.folderData(f.id) })) };
+      const folders = auth.teacher ? store.folders({ includeArchived: true }) : [auth.own];
+      return { role: auth.teacher ? 'teacher' : 'student', students: folders.map(f => ({ id: f.id, name: f.name,
+        ...(auth.teacher ? { key: f.key, ...(f.archived_at ? { archivedAt: f.archived_at } : {}) } : {}), ...store.folderData(f.id) })) };
     }
     if (action === 'url' || action === 'uploadUrl') {
       const folder = folderFor(auth, body.folder), name = action === 'url' ? existingName(body.name) : cleanName(body.name);
       if (name === META_NAME) throw new HttpError(403, 'Служебный файл');
       if (action === 'uploadUrl') assertWritable(); else store.file(folder.id, name);
       const purpose = action === 'url' ? 'media' : 'upload';
-      const payload = { purpose, folder: folder.id, name, principal: auth.principal, expires: Date.now() + (purpose === 'media' ? 3600000 : 900000), nonce: crypto.randomUUID(), overwrite: !!body.overwrite };
+      const payload = { purpose, folder: folder.id, name, principal: auth.principal, accessVersion: folder.access_version,
+        expires: Date.now() + (purpose === 'media' ? 3600000 : 900000), nonce: crypto.randomUUID(), overwrite: !!body.overwrite };
       return { href: `${baseUrl}/${purpose}?token=${sign(payload)}` };
     }
     assertWritable();
@@ -128,6 +134,22 @@ export function createApp({ directory, teacherKey, signingKey, baseUrl, readOnly
           teacherOnly(auth); const f = folderFor(auth, body.folder);
           store.audit('folder-rename', { id: f.id, previous: f.name });
           store.db.prepare('UPDATE folders SET name=? WHERE id=?').run(cleanName(body.newName), f.id); break;
+        }
+        case 'archiveStudent': {
+          teacherOnly(auth); const f = folderFor(auth, body.folder);
+          if (!f.archived_at) {
+            store.audit('folder-archive', { id: f.id });
+            store.db.prepare('UPDATE folders SET archived_at=?,access_version=access_version+1 WHERE id=?').run(new Date().toISOString(), f.id);
+          }
+          break;
+        }
+        case 'restoreStudent': {
+          teacherOnly(auth); const f = folderFor(auth, body.folder);
+          if (f.archived_at) {
+            store.audit('folder-restore', { id: f.id, archivedAt: f.archived_at });
+            store.db.prepare('UPDATE folders SET archived_at=NULL,access_version=access_version+1 WHERE id=?').run(f.id);
+          }
+          break;
         }
         case 'deleteStudent': {
           teacherOnly(auth); const f = folderFor(auth, body.folder);

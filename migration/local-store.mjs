@@ -32,6 +32,12 @@ export class Store {
       CREATE TABLE IF NOT EXISTS revisions(id INTEGER PRIMARY KEY,at TEXT NOT NULL,action TEXT NOT NULL,detail TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS used_uploads(nonce TEXT PRIMARY KEY,expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS settings(name TEXT PRIMARY KEY,value TEXT NOT NULL);`);
+    // Additive migration preserves existing pupil IDs, keys, files and backups.
+    this.transaction(() => {
+      const columns = new Set(this.db.prepare('PRAGMA table_info(folders)').all().map(c => c.name));
+      if (!columns.has('archived_at')) this.db.exec('ALTER TABLE folders ADD COLUMN archived_at TEXT');
+      if (!columns.has('access_version')) this.db.exec('ALTER TABLE folders ADD COLUMN access_version INTEGER NOT NULL DEFAULT 0');
+    });
   }
   transaction(fn) {
     this.db.exec('BEGIN IMMEDIATE');
@@ -54,7 +60,9 @@ export class Store {
     }
     return { blob: hash, size: bytes.length };
   }
-  folders() { return this.db.prepare('SELECT * FROM folders WHERE deleted=0 ORDER BY name').all(); }
+  folders({ includeArchived = false } = {}) {
+    return this.db.prepare(`SELECT * FROM folders WHERE deleted=0${includeArchived ? '' : ' AND archived_at IS NULL'} ORDER BY name`).all();
+  }
   folder(id) {
     const item = this.db.prepare('SELECT * FROM folders WHERE id=? AND deleted=0').get(id);
     if (!item) throw new HttpError(403, 'Нет доступа к этой папке');

@@ -6,7 +6,7 @@ import { Metronome, StandaloneMetronome, DRUM_PATTERNS, fitTaps } from './metron
 import { detectTempo, TEMPO_VERSION } from './tempo.js?v=metro3';
 import { loadWaveform, drawWaveform } from './waveform.js?v=garden1';
 import { attachMediaControls, playbackSession, primeAudio } from './media.js?v=mobile1';
-import { parseRoute, studentPath, songPath } from './navigation.js?v=songpages1';
+import { parseRoute, studentPath, songPath } from './navigation.js?v=archive1';
 import { attachProgress } from './player-progress.js?v=songpages1';
 
 const main = document.getElementById('main');
@@ -14,6 +14,7 @@ let role = null;         // 'teacher' | 'student'
 let library = null;      // [{id, name, key?, songs}]
 let libraryKey = null;   // для какого ключа загружена библиотека
 let openEditor = null;   // песня, у которой открыт редактор (folder + key)
+let teacherArchive = false;
 
 // ---------- Маленький помощник для создания элементов ----------
 function h(tag, attrs = {}, ...children) {
@@ -112,7 +113,7 @@ async function ensureLibrary(key, force) {
   role = data.role;
   libraryKey = key;
   library = data.students
-    .map(d => ({ id: d.id, name: d.name, key: d.key, songs: withMeta(groupSongs(d.files), d.meta) }))
+    .map(d => ({ id: d.id, name: d.name, key: d.key, archivedAt: d.archivedAt || null, songs: withMeta(groupSongs(d.files), d.meta) }))
     .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
 }
 
@@ -150,6 +151,7 @@ async function route(force = false, quiet = false) {
     if (s) return song ? renderSong(s, song) : renderStudent(s);
     if (!force) return route(true, quiet);   // может, ученика только что добавили
   }
+  teacherArchive = !!m.archive;
   renderTeacher(key);
 }
 
@@ -184,18 +186,21 @@ async function copyText(text, btn) {
 }
 
 function renderTeacher(key) {
-  document.title = 'Все ученики — Песни';
+  document.title = teacherArchive ? 'Архив учеников — Песни' : 'Все ученики — Песни';
+  const active = library.filter(s => !s.archivedAt), archived = library.filter(s => s.archivedAt);
+  const visible = teacherArchive ? archived : active;
   const results = h('div', { class: 'results' });
-  const grid = h('div', { class: 'students' }, library.map(s => studentCard(s, key)));
+  const grid = h('div', { class: 'students' }, visible.length ? visible.map(s => studentCard(s, key)) :
+    h('p', { class: 'muted' }, teacherArchive ? 'В архиве пока никого нет.' : 'Здесь пока нет учеников.'));
 
   const search = h('input', {
-    type: 'search', class: 'search', placeholder: 'Найти песню у всех учеников…',
+    type: 'search', class: 'search', placeholder: teacherArchive ? 'Найти песню в архиве…' : 'Найти песню у всех учеников…',
     oninput: () => {
       const q = songKey(search.value);
       grid.hidden = !!q;
       if (!q) return results.replaceChildren();
       const found = [];
-      for (const s of library) for (const song of s.songs)
+      for (const s of visible) for (const song of s.songs)
         if (song.key.includes(q)) found.push({ s, song });
       results.replaceChildren(found.length
         ? h('div', { class: 'songs song-index' }, found.map(({ s, song }) => songListItem(song, s, true)))
@@ -208,19 +213,45 @@ function renderTeacher(key) {
     if (name?.trim()) mutate(() => call('createStudent', { name }), `Добавлен: ${name.trim()}`);
   };
 
-  const total = library.reduce((n, s) => n + s.songs.length, 0);
+  const total = visible.reduce((n, s) => n + s.songs.length, 0);
   main.replaceChildren(
     h('header', { class: 'page-head' },
       h('div', {},
         h('p', { class: 'eyebrow' }, 'Страница преподавателя'),
-        h('h1', {}, 'Мои ученики'),
+        h('h1', {}, teacherArchive ? 'Архив учеников' : 'Мои ученики'),
         h('p', { class: 'page-phrase' }, 'Дать голосу свободу.'),
-        h('p', { class: 'muted' }, `${plural(library.length, 'страничка', 'странички', 'страничек')} · ${plural(total, 'песня', 'песни', 'песен')}`)),
+        h('p', { class: 'muted' }, `${plural(visible.length, 'страничка', 'странички', 'страничек')} · ${plural(total, 'песня', 'песни', 'песен')}`)),
       h('div', { class: 'head-actions' },
         h('button', { class: 'btn primary', onclick: addStudent }, '+ Ученик'),
         h('button', { class: 'btn ghost', onclick: () => route(true) }, 'Обновить'))),
+    h('nav', { class: 'archive-tabs', 'aria-label': 'Ученики и архив' },
+      h('button', { class: 'btn ghost', 'aria-pressed': String(!teacherArchive), onclick: () => { location.hash = `#/t/${key}`; } }, `Ученики (${active.length})`),
+      h('button', { class: 'btn ghost', 'aria-pressed': String(teacherArchive), onclick: () => { location.hash = `#/t/${key}/archive`; } }, `Архив (${archived.length})`)),
+    ...(teacherArchive ? [h('p', { class: 'archive-notice' }, 'Доступ учеников закрыт. Все песни, тексты и заметки сохранены. После восстановления прежняя ссылка снова заработает.')] : []),
     search, results, grid,
     h('p', { class: 'muted hint' }, 'Не показывайте эту страницу ученикам: её адрес открывает доступ ко всем песням.'));
+}
+
+function archiveStudent(student) {
+  const dialog = h('dialog', { class: 'archive-dialog', 'aria-labelledby': 'archive-dialog-title' },
+    h('h2', { id: 'archive-dialog-title' }, 'Отправить ученика в архив?'),
+    h('p', {}, `Доступ для «${student.name}» закроется. Все песни, тексты и заметки сохранятся. Ученика можно будет вернуть с прежней ссылкой.`),
+    h('div', { class: 'student-actions' },
+      h('button', { class: 'btn ghost', autofocus: true, onclick: () => dialog.close() }, 'Отмена'),
+      h('button', { class: 'btn primary', onclick: () => {
+        dialog.close();
+        mutate(async () => {
+          await call('archiveStudent', { folder: student.id });
+          teacherArchive = false;
+          location.hash = `#/t/${libraryKey}`;
+        }, 'Ученик в архиве. Материалы сохранены');
+      } }, 'Отправить в архив')));
+  dialog.addEventListener('close', () => dialog.remove(), { once: true });
+  document.body.append(dialog); dialog.showModal();
+}
+
+function restoreStudent(student) {
+  return mutate(() => call('restoreStudent', { folder: student.id }), 'Ученик восстановлен. Прежняя ссылка снова работает');
 }
 
 function studentCard(s, key) {
@@ -231,10 +262,14 @@ function studentCard(s, key) {
     h('div', { class: 'student-mark', 'aria-hidden': 'true' }, s.name.split(/\s+/).filter(x => /^\p{L}/u.test(x)).slice(0, 2).map(x => x[0]).join('')),
     h('a', { class: 'student-name', href }, s.name),
     h('p', { class: 'muted' }, plural(s.songs.length, 'песня', 'песни', 'песен'),
-      fresh ? h('span', { class: 'badge' }, `новых: ${fresh}`) : null),
+      studentArchiveLabel(s),
+      fresh && !s.archivedAt ? h('span', { class: 'badge' }, `новых: ${fresh}`) : null),
     h('div', { class: 'student-actions' },
-      h('a', { class: 'btn small primary', href }, 'Открыть'), copyBtn));
+      h('a', { class: 'btn small primary', href }, 'Открыть'), s.archivedAt ? null : copyBtn,
+      h('button', { class: 'btn small', onclick: () => s.archivedAt ? restoreStudent(s) : archiveStudent(s) }, s.archivedAt ? 'Восстановить' : 'В архив')));
 }
+
+const studentArchiveLabel = s => s.archivedAt ? h('span', { class: 'badge' }, 'В архиве · доступ закрыт') : null;
 
 // ---------- Страница ученика ----------
 let sortMode = localGet('sort') || 'name';
@@ -272,7 +307,8 @@ function renderStudent(student) {
   }, '+ Песня');
 
   const teacherTools = isTeacher && h('div', { class: 'teacher-tools' },
-    h('a', { class: 'btn ghost small', href: `#/t/${libraryKey}` }, '← Все ученики'),
+    h('a', { class: 'btn ghost small', href: `#/t/${libraryKey}${student.archivedAt ? '/archive' : ''}` }, student.archivedAt ? '← Архив учеников' : '← Все ученики'),
+    student.archivedAt && h('button', { class: 'btn small primary', onclick: () => restoreStudent(student) }, 'Восстановить ученика'),
     (() => {
       const b = h('button', { class: 'btn small', onclick: () => copyText(studentLink(student), b) }, /ансамбль/i.test(student.name) ? 'Скопировать ссылку ансамбля' : 'Скопировать ссылку ученика');
       return b;
@@ -293,15 +329,11 @@ function renderStudent(student) {
               mutate(() => call('resetLink', { folder: student.id }), 'Новая ссылка готова — скопируйте её');
           },
         }, 'Новая ссылка (старая перестанет работать)'),
-        h('button', {
-          class: 'btn small danger', onclick: () => {
-            if (confirm(`Удалить страничку «${student.name}» со всеми песнями? Папка уйдёт в корзину Яндекс Диска, её можно будет восстановить оттуда.`))
-              mutate(async () => { await call('deleteStudent', { folder: student.id }); location.hash = `#/t/${libraryKey}`; }, 'Удалено (в корзине Диска)');
-          },
-        }, 'Удалить ученика'))));
+        !student.archivedAt && h('button', { class: 'btn small', onclick: () => archiveStudent(student) }, 'Отправить в архив'))));
 
   main.replaceChildren(...[
     teacherTools,
+    isTeacher && student.archivedAt && h('p', { class: 'archive-notice' }, 'Ученик в архиве. Его доступ закрыт, все материалы сохранены.'),
     isTeacher && /ансамбль/i.test(student.name) && h('p', {class: 'muted ensemble-hint'}, 'Одна ссылка для всех участников ансамбля. Можно открывать одновременно на разных устройствах.'),
     h('header', { class: 'page-head' },
       h('div', {},

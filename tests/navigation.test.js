@@ -19,3 +19,8 @@ test('malformed and foreign-folder pupil routes are rejected without throwing', 
   for(const hash of ['#/s/abcdefgh1234/song/%E0%A4','#/s/abcdefgh1234/s/other','#/s/short','#/t/abcdefgh1234/s/%ZZ'])
     assert.equal(parseRoute(hash),null);
 });
+test('teacher archive has a reloadable route without changing existing pupil links',()=>{
+  assert.deepEqual(parseRoute('#/t/abcdefgh1234/archive'),{mode:'t',key:'abcdefgh1234',folder:null,song:null,archive:true});
+  assert.equal(parseRoute('#/s/abcdefgh1234/archive'),null);
+  assert.equal(parseRoute('#/t/short/archive'),null);
+});

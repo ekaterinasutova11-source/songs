@@ -1,5 +1,8 @@
 export function parseRoute(hash) {
-  const match = hash.replace(/^#\/?/, '').match(/^([ts])\/([\w-]{8,})(?:\/s\/([^/]+))?(?:\/song\/([^/]+))?$/);
+  const route = hash.replace(/^#\/?/, '');
+  const archive = route.match(/^t\/([\w-]{8,})\/archive$/);
+  if (archive) return { mode: 't', key: archive[1], folder: null, song: null, archive: true };
+  const match = route.match(/^([ts])\/([\w-]{8,})(?:\/s\/([^/]+))?(?:\/song\/([^/]+))?$/);
   if (!match || (match[1] === 's' && match[3])) return null;
   try {
     return {mode: match[1], key: match[2], folder: match[3] ? decodeURIComponent(match[3]) : null,

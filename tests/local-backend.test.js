@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { createApp } from '../migration/server.mjs';
-import { META_NAME } from '../migration/local-store.mjs';
+import { Store, META_NAME } from '../migration/local-store.mjs';
+import { DatabaseSync } from 'node:sqlite';
 
 async function fixture(readOnly=false) {
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'songs-api-'));
@@ -95,8 +96,75 @@ test('staging prevents ALL mutations and upload tickets but permits reads',async
   try {
     assert.equal((await app.request('library')).status,200);
     assert.equal((await app.request('url',{folder:'a',name:'song.mp3'})).status,200);
-    for(const action of ['uploadUrl','saveText','rename','delete','copyTo','saveMeta','createStudent','renameStudent','deleteStudent','resetLink']) {
+    for(const action of ['uploadUrl','saveText','rename','delete','copyTo','saveMeta','createStudent','renameStudent','deleteStudent','resetLink','archiveStudent','restoreStudent']) {
       assert.equal((await app.request(action,{folder:'a',name:'song.mp3'})).status,503,action);
     }
   } finally {await app.close();}
+});
+
+test('archive closes pupil access and old media/upload tickets, preserves all materials, restores the original link',async()=>{
+  const app=await fixture();
+  try{
+    await app.request('saveMeta',{folder:'a',song:'song',patch:{notes:'Keep notes',translation:'Keep translation',impulse:'тихо плавно'}});
+    const before=app.store.folderData('a'),key=app.store.folder('a').key;
+    const download=await app.request('url',{folder:'a',name:'song.mp3'},key);
+    const upload=await app.request('uploadUrl',{folder:'a',name:'pending.txt'},key);
+    const teacherDownload=await app.request('url',{folder:'a',name:'song.mp3'});
+    const files=app.store.db.prepare('SELECT * FROM files WHERE folder=? ORDER BY name').all('a');
+    assert.equal((await app.request('archiveStudent',{folder:'a'},'pupil-a')).status,403);
+    assert.equal((await app.request('archiveStudent',{folder:'a'},'pupil-b')).status,403);
+    assert.equal((await app.request('restoreStudent',{folder:'a'},'pupil-b')).status,403);
+    assert.equal((await app.request('archiveStudent',{folder:'a'})).status,200);
+    const archived=app.store.folder('a');assert(archived.archived_at);assert.equal(archived.key,key);
+    assert.equal(archived.deleted,0);assert.deepEqual(app.store.folderData('a'),before);
+    assert.deepEqual(app.store.db.prepare('SELECT * FROM files WHERE folder=? ORDER BY name').all('a'),files);
+    assert.equal(app.store.folders().length,1);
+    const teacher=(await app.request('library')).data.students.find(s=>s.id==='a');
+    assert.equal(teacher.archivedAt,archived.archived_at);assert.equal(teacher.meta.song.notes,'Keep notes');
+    for(const action of ['library','url','saveMeta','saveText','uploadUrl','restoreStudent'])assert.equal((await app.request(action,{folder:'a',name:'song.mp3'},key)).status,403,action);
+    assert.equal((await fetch(app.signed(download.data.href))).status,403);
+    assert.equal((await fetch(app.signed(upload.data.href),{method:'PUT',body:'must not save'})).status,403);
+    assert.equal((await fetch(app.signed(teacherDownload.data.href))).status,200);
+    await app.request('archiveStudent',{folder:'a'});assert.equal(app.store.folder('a').access_version,archived.access_version,'archive is idempotent');
+    assert.equal((await app.request('restoreStudent',{folder:'a'})).status,200);
+    assert.equal(app.store.folder('a').archived_at,null);assert.equal(app.store.folder('a').key,key);
+    assert.equal((await app.request('library',{},key)).status,200);
+    assert.deepEqual(app.store.folderData('a'),before);
+    // Old tickets must not spring back to life after restoration.
+    assert.equal((await fetch(app.signed(download.data.href))).status,403);
+    assert.equal((await fetch(app.signed(upload.data.href),{method:'PUT',body:'still must not save'})).status,403);
+    const fresh=await app.request('url',{folder:'a',name:'song.mp3'},key);
+    assert.equal(await(await fetch(app.signed(fresh.data.href))).text(),'0123456789');
+    assert.throws(()=>app.store.file('a','pending.txt'));
+    const restored=app.store.folder('a').access_version;await app.request('restoreStudent',{folder:'a'});assert.equal(app.store.folder('a').access_version,restored);
+  }finally{await app.close();}
+});
+
+test('additive archive migration opens an existing database without changing issued keys or file rows',async()=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'songs-before-archive-'));
+  const db=new DatabaseSync(path.join(directory,'songs.sqlite'));
+  db.exec("CREATE TABLE folders(id TEXT PRIMARY KEY,name TEXT NOT NULL,key TEXT NOT NULL UNIQUE,deleted INTEGER NOT NULL DEFAULT 0); INSERT INTO folders(id,name,key) VALUES('old-id','Existing pupil','existing-key');");db.close();
+  let app;
+  try{
+    app=createApp({directory,teacherKey:'teacher',signingKey:'secret',baseUrl:'http://localhost'});
+    assert.equal(app.store.folder('old-id').key,'existing-key');assert.equal(app.store.folder('old-id').archived_at,null);assert.equal(app.store.folder('old-id').access_version,0);
+    app.store.close();
+    app=createApp({directory,teacherKey:'teacher',signingKey:'secret',baseUrl:'http://localhost'});
+    assert.equal(app.store.folder('old-id').key,'existing-key');
+  }finally{app?.store.close();fs.rmSync(directory,{recursive:true,force:true});}
+});
+
+test('archive state, access revocation and material references survive a SQLite backup and reopen',async()=>{
+  const app=await fixture();
+  const restoredDirectory=fs.mkdtempSync(path.join(os.tmpdir(),'songs-restored-archive-'));
+  let restored;
+  try{
+    await app.request('archiveStudent',{folder:'a'});
+    app.store.db.exec('VACUUM INTO '+"'"+path.join(restoredDirectory,'songs.sqlite').replace(/\\/g,'/').replace(/'/g,"''")+"'");
+    fs.cpSync(path.join(app.directory,'blobs'),path.join(restoredDirectory,'blobs'),{recursive:true});
+    restored=new Store(restoredDirectory);
+    assert(restored.folder('a').archived_at);assert.equal(restored.folder('a').key,'pupil-a');
+    assert.equal(restored.folders().length,1);assert.equal(restored.folder('a').access_version,1);
+    assert.equal(fs.readFileSync(restored.blobPath(restored.file('a','song.mp3').blob),'utf8'),'0123456789');
+  }finally{restored?.close();fs.rmSync(restoredDirectory,{recursive:true,force:true});await app.close();}
 });
