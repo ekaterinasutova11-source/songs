@@ -275,9 +275,11 @@ body.has-player .editor-footer, body.has-player:has(.player.with-metro) .editor-
 :root[data-lyrics-font="times"] .lyrics-text { font-family: 'Times New Roman', Times, serif; font-size: 19px; }
 :root[data-lyrics-font="mono"] .lyrics-text { font-family: ui-monospace, Consolas, monospace; font-size: 15px; }
 :root[data-lyrics-font="rounded"] .lyrics-text { font-family: ui-rounded, 'Trebuchet MS', system-ui, sans-serif; font-size: 17px; }
-.lyric-line { display: block; min-height: 1.9em; white-space: pre-wrap; }
+.lyric-line { display: block; min-height: 1.9em; white-space: pre-wrap; position: relative; padding-left: 64px; }
 .lyric-timed { border: 0; width: 100%; background: transparent; padding: 0 4px; text-align: left; cursor: pointer; color: inherit; font: inherit; line-height: inherit; border-radius: 5px; }
 .lyric-timed:hover, .lyric-timed:focus-visible { background: var(--surface); outline: 1px solid var(--accent); }
+.lyric-timed { padding-left:64px; }
+.lyric-timed::before { content:attr(data-time); position:absolute; left:4px; top:.3em; color:var(--accent); font:600 12px/1.9 'Manrope',sans-serif; }
 .timing-warning { margin-top: 10px; color: var(--accent); font-size: 12px; }
 .timing-dialog { width: min(720px, calc(100% - 24px)); }
 .timing-fields { display: grid; gap: 8px; margin: 16px 0; }

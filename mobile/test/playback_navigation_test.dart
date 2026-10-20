@@ -65,7 +65,12 @@ void main() {
       );
       await tester.pumpWidget(SongsApp(api: api, store: store, player: player));
       await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(find.text('Второй ученик'),100,scrollable:find.byType(Scrollable).first);
+      expect(find.byTooltip('Метроном к записи'), findsOneWidget);
+      await tester.scrollUntilVisible(
+        find.text('Второй ученик'),
+        100,
+        scrollable: find.byType(Scrollable).first,
+      );
       await tester.tap(find.text('Второй ученик'));
       await tester.pumpAndSettle();
       expect(player.stops, 0);

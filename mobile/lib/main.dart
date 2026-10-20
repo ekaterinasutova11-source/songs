@@ -962,7 +962,10 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
                         maxHeight: MediaQuery.sizeOf(context).height * .46,
                       ),
                       child: SingleChildScrollView(
-                        child: SongsPlayer(controller: _player),
+                        child: SongsPlayer(
+                          controller: _player,
+                          onMetronome: _showMetronome,
+                        ),
                       ),
                     ),
                   ],

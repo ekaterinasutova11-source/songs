@@ -387,9 +387,10 @@ class PlayerController extends ChangeNotifier {
 }
 
 class SongsPlayer extends StatefulWidget {
-  const SongsPlayer({super.key, required this.controller});
+  const SongsPlayer({super.key, required this.controller, this.onMetronome});
 
   final PlayerController controller;
+  final VoidCallback? onMetronome;
 
   @override
   State<SongsPlayer> createState() => _SongsPlayerState();
@@ -455,6 +456,12 @@ class _SongsPlayerState extends State<SongsPlayer> {
                       ],
                     ),
                   ),
+                  if (widget.onMetronome != null)
+                    IconButton(
+                      tooltip: 'Метроном к записи',
+                      onPressed: widget.onMetronome,
+                      icon: const Icon(Icons.timer_outlined),
+                    ),
                 ],
               ),
               if (player.isLoading) const LinearProgressIndicator(),

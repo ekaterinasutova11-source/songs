@@ -534,7 +534,7 @@ function songReading(song, student) {
           body.replaceChildren(...renderedLyricLines(text).map((html, line) => {
             const seconds = bindings.get(line);
             const el = seconds == null ? h('span', {class: 'lyric-line'}) : h('button', {
-              type: 'button', class: 'lyric-line lyric-timed', title: `Перейти к ${formatTimecode(seconds)}`,
+              type: 'button', class: 'lyric-line lyric-timed', 'data-time':formatTimecode(seconds), title: `Перейти к ${formatTimecode(seconds)}`,
               onclick: () => player.seekVariant(song, timings.track, student, seconds),
             });
             el.innerHTML = html || '<br>'; return el;
