@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Сад звука — переходим на новый сервер</title>
+<style>body{font:18px/1.6 system-ui,sans-serif;background:#f5f1e9;color:#294038;max-width:560px;margin:15vh auto;padding:24px}a{color:#294038}p{margin:1em 0}</style>
+<h1>Сад звука</h1>
+<p>Открываем вашу страницу на новом сервере. Личная ссылка и материалы сохранены.</p>
+<p><a id="continue" href="https://135.106.183.211/" rel="noreferrer">Перейти на сайт</a></p>
+<noscript><p>Для открытия личной страницы включите JavaScript. Самостоятельный переход без него не перенесёт личную часть ссылки.</p></noscript>
+<script>
+  // Fixed trusted destination: never read a redirect target from a query parameter.
+  const destination = new URL('https://135.106.183.211/');
+  destination.search = location.search;
+  destination.hash = location.hash;
+  document.getElementById('continue').href = destination.href;
+  location.replace(destination.href);
+</script>
+</html>
