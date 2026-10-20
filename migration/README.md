@@ -295,3 +295,12 @@ blobs, восстановить работоспособность Selectel ли
 - [Подключение к VDS по SSH](https://docs.selectel.ru/vds-servers/manage/connect-to-server/)
 - [Особенности локального диска и резервирования VDS](https://docs.selectel.ru/vds-servers/about/about-vds-server/)
 - [Разрешения по проектам](https://docs.selectel.ru/access-control/permissions/)
+
+## Раздача Android-тестовой сборки
+
+Тестовый APK доступен по `/downloads/sad-zvuka-0.1.0-test.apk` в корне
+`/var/www/songs/downloads`. Это отдельный добавленный файл; сайт/API не менялись.
+При следующей смене frontend release сохранить каталог downloads либо перенести
+его в общий каталог с соответствующей настройкой nginx: prepare-frontend.mjs
+не включает APK автоматически. Публиковать только конкретный проверенный APK,
+не каталоги outputs/secrets и не весь mobile/build.
