@@ -1,8 +1,8 @@
 import { call, setKey, fileUrl, fileText, uploadFile, reserveFileUrl, storageState } from './api.js?v=selectel1';
 import { groupSongs, variantName, songKey, buildFileName, retitleFileName, parseFileName, AUDIO_EXT } from './parse.js';
 import { NEW_DAYS, NEW_SINCE } from './config.js?v=selectel1';
-import { renderLyrics, editorToMarkup, COLORS, normalizeColor } from './lyrics.js?v=format2';
-import { Metronome, StandaloneMetronome, DRUM_PATTERNS, fitTaps } from './metronome.js?v=mobile1';
+import { renderLyrics, renderedLyricLines, validateTimings, parseTimecode, formatTimecode, editorToMarkup, COLORS, normalizeColor } from './lyrics.js?v=practice1';
+import { Metronome, StandaloneMetronome, DRUM_PATTERNS, fitTaps } from './metronome.js?v=practice1';
 import { detectTempo, TEMPO_VERSION } from './tempo.js?v=metro3';
 import { loadWaveform, drawWaveform } from './waveform.js?v=garden1';
 import { attachMediaControls, playbackSession, primeAudio } from './media.js?v=mobile1';
@@ -43,9 +43,46 @@ const plural = (n, one, few, many) => {
 
 const isNew = iso => iso && iso >= NEW_SINCE && (Date.now() - new Date(iso)) < NEW_DAYS * 864e5;
 const extOf = name => (name.match(/\.[^.]+$/) || ['.mp3'])[0].toLowerCase();
+const canEditLyrics = student => role === 'teacher' || (role === 'student' && library?.some(space => space.id === student.id));
+
+async function downloadVariant(student, variant, button) {
+  if (button.disabled) return;
+  button.disabled = true;
+  try {
+    const url = await fileUrl(student.id, variant.file.name);
+    const response = await fetch(url);
+    if (!response.ok) throw new Error('Не удалось скачать запись. Обновите страницу и попробуйте ещё раз.');
+    const objectUrl = URL.createObjectURL(await response.blob());
+    const link = h('a', {href: objectUrl, download: variant.file.name.replace(/[\\/:*?"<>|]/g, '_'), hidden: true});
+    document.body.append(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+  } catch (error) { toast(error.message || 'Запись не скачалась.', 'error'); }
+  finally { button.disabled = false; }
+}
 
 function localGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function localSet(k, v) { try { localStorage.setItem(k, v); } catch { /* приватный режим */ } }
+function beatMaskControls(metro, storageKey) {
+  try { metro.setBeatMask(JSON.parse(localGet(storageKey))); } catch { metro.setBeatMask([true, true, true, true]); }
+  const buttons = h('div', {class: 'beat-buttons', role: 'group', 'aria-label': 'Звучащие доли'});
+  const count = h('select', {class: 'beat-count', 'aria-label': 'Долей в цикле', onchange: () => {
+    metro.setBeatMask(Array.from({length: Number(count.value)}, (_, index) => metro.beatMask[index] ?? true));
+    localSet(storageKey, JSON.stringify(metro.beatMask)); draw();
+  }}, Array.from({length: 12}, (_, index) => h('option', {value: index + 1}, String(index + 1))));
+  function draw() {
+    count.value = String(metro.beatMask.length);
+    buttons.replaceChildren(...metro.beatMask.map((audible, index) => h('button', {
+      type: 'button', class: 'beat-toggle', 'aria-label': `Доля ${index + 1}: ${audible ? 'звук включён' : 'тишина'}`,
+      'aria-pressed': String(audible), onclick: () => {
+        const mask = [...metro.beatMask]; mask[index] = !mask[index]; metro.setBeatMask(mask);
+        localSet(storageKey, JSON.stringify(mask)); draw();
+      },
+    }, String(index + 1))));
+  }
+  draw();
+  return {el: h('div', {class: 'beat-mask'}, h('label', {}, 'Доли ', count), buttons),
+    pulse(slot) { buttons.querySelectorAll('button').forEach((button, index) => button.classList.toggle('beat-current', index === slot)); }};
+}
 // Accessing localStorage itself may be forbidden by the browser.
 let scaleStorage;
 try { scaleStorage = localStorage; } catch { scaleStorage = null; }
@@ -58,7 +95,7 @@ if (scaleSelect) {
     window.dispatchEvent(new Event('resize'));
   });
 }
-const lyricFonts = {modern: 'Современный', book: 'Книжный', clear: 'Чёткий', spacious: 'Просторный'};
+const lyricFonts = {modern: 'Manrope · современный', garden: 'Cormorant · изящный', book: 'Georgia · книжный', clear: 'Arial · чёткий', spacious: 'Verdana · просторный', times: 'Times · классический', mono: 'Моноширинный', rounded: 'Округлый системный'};
 const selectedLyricFont = () => Object.hasOwn(lyricFonts, localGet('songs:lyrics-font')) ? localGet('songs:lyrics-font') : 'modern';
 document.documentElement.dataset.lyricsFont = selectedLyricFont();
 document.addEventListener('change', event => {
@@ -113,6 +150,7 @@ function saveMeta(folder, song, extra) {
 async function ensureLibrary(key, force) {
   const request = ++libraryRequest;
   if (library && libraryKey === key && !force) return;
+  if (libraryKey && libraryKey !== key) player.stop();
   setKey(key);
   const data = await call('library', {includeSpaces: true});
   if (request !== libraryRequest) return;
@@ -130,6 +168,7 @@ async function ensureLibrary(key, force) {
   library = data.students
     .map(d => ({ id: d.id, name: d.name, key: d.key, kind: d.kind || 'individual', members: d.members || [], archivedAt: d.archivedAt || null, songs: withMeta(groupSongs(d.files), d.meta) }))
     .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+  player.restrictTo(library);
 }
 
 function showState(...children) {
@@ -146,20 +185,20 @@ async function route(force = false, quiet = false) {
   const m = parseRoute(location.hash);
   if (!m) { reserveNotice.hidden = true; standalone.setVisible(false); return hash ? renderOldLink() : renderLanding(); }
   const {mode, key, folder, song} = m;
-  if (mode !== 't' || libraryKey !== key) standalone.setVisible(false);
+  if (libraryKey !== key) standalone.setVisible(false);
   if (!quiet || !library) showState(h('div', { class: 'spinner' }), 'Загружаю песни…');
   try {
     await ensureLibrary(key, force);
     if (request !== routeRequest) return;
   } catch (e) {
     if (request !== routeRequest) return;
-    if (e.status === 403) standalone.setVisible(false);
+    if (e.status === 403) { standalone.setVisible(false); player.stop(); }
     return showState(
       h('p', {}, e.status === 403 ? 'Эта ссылка не работает.' : 'Не получилось загрузить песни.'),
       h('p', { class: 'muted' }, e.message),
       e.status === 403 ? null : h('button', { class: 'btn', onclick: () => route(true) }, 'Попробовать снова'));
   }
-  standalone.setVisible(role === 'teacher' && mode === 't');
+  standalone.setVisible(true);
   if (role === 'student' || mode === 's') {
     const space = selectStudentSpace(library, ownId || library[0]?.id, folder);
     if (!space) {
@@ -482,7 +521,25 @@ function songReading(song, student) {
     panes[id] = { box, async load() {
       if (!job) {
         body.textContent = 'Загружаю текст…';
-        job = Promise.resolve().then(load).then(text => { body.innerHTML = renderLyrics(text); })
+        job = Promise.resolve().then(load).then(text => {
+          text = text.replace(/^\uFEFF/, '');
+          if (id !== 'original') { body.innerHTML = renderLyrics(text); return; }
+          const timings = validateTimings(song.meta.timings, song, text);
+          if (!timings.valid) {
+            body.innerHTML = renderLyrics(text);
+            if (timings.reason) box.append(h('p', {class: 'timing-warning muted small'}, timings.reason));
+            return;
+          }
+          const bindings = new Map(timings.lines.map(line => [line.line, line.seconds]));
+          body.replaceChildren(...renderedLyricLines(text).map((html, line) => {
+            const seconds = bindings.get(line);
+            const el = seconds == null ? h('span', {class: 'lyric-line'}) : h('button', {
+              type: 'button', class: 'lyric-line lyric-timed', title: `Перейти к ${formatTimecode(seconds)}`,
+              onclick: () => player.seekVariant(song, timings.track, student, seconds),
+            });
+            el.innerHTML = html || '<br>'; return el;
+          }));
+        })
           .catch(e => { job = null; body.replaceChildren(h('p', {}, 'Не удалось загрузить текст.'), h('button', { class: 'btn small', onclick: () => panes[id].load() }, 'Повторить')); });
       }
       await job;
@@ -503,8 +560,66 @@ function songReading(song, student) {
   if (panes.original) controls.append(button('original', panes.translation ? 'Оригинал' : 'Текст песни'));
   if (panes.translation) controls.append(button('translation', 'Перевод'));
   if (panes.original && panes.translation) controls.append(button('both', 'Рядом'));
+  if (song.lyrics && canEditLyrics(student) && song.variants.some(v => v.kind === 'minus')) {
+    controls.append(h('button', {class: 'reading-mode', onclick: () => timingDialog(song, student)}, 'Таймкоды'));
+  }
   panel.append(h('button', { class: 'link-btn collapse', onclick: () => set('closed') }, 'Свернуть текст'));
   return { panel, controls, close: () => set('closed') };
+}
+
+async function timingDialog(song, student) {
+  if (document.querySelector('.timing-dialog')) return;
+  let text;
+  try { text = (await fileText(student.id, song.lyrics.name)).replace(/^\uFEFF/, ''); }
+  catch (error) { return toast(error.message, 'error'); }
+  const tracks = song.variants.filter(v => v.kind === 'minus');
+  const old = validateTimings(song.meta.timings, song, text);
+  const trackSelect = h('select', {class: 'field', 'aria-label': 'Минус для таймкодов'}, tracks.map(v => h('option', {value: v.file.name}, variantName(v))));
+  trackSelect.value = old.track?.file.name || tracks[0].file.name;
+  const fields = text.split(/\r?\n/).map((line, index) => {
+    if (!line.trim()) return null;
+    const saved = old.lines.find(item => item.line === index);
+    const input = h('input', {class: 'field timing-input', value: saved ? formatTimecode(saved.seconds) : '',
+      placeholder: '0:00', 'aria-label': `Время строки ${index + 1}`, inputmode: 'text'});
+    const preview = h('span', {class: 'timing-preview'}); preview.innerHTML = renderLyrics(line);
+    return {line: index, text: line, input, row: h('div', {class: 'timing-row'}, preview, input,
+      h('button', {class: 'btn small', onclick: () => {
+        const seconds = player.positionFor(student, song, trackSelect.value);
+        if (seconds == null) return toast('Сначала включите выбранный минус');
+        input.value = formatTimecode(seconds);
+      }}, 'Сейчас'))};
+  }).filter(Boolean);
+  trackSelect.addEventListener('change', () => { fields.forEach(field => {field.input.value = '';}); });
+  const status = h('p', {class: 'muted small', role: 'status'});
+  let pending = false;
+  const save = h('button', {class: 'btn primary', onclick: async () => {
+    if (pending) return;
+    const lines = [];
+    for (const field of fields) {
+      if (!field.input.value.trim()) continue;
+      const seconds = parseTimecode(field.input.value);
+      if (seconds == null) { status.textContent = 'Укажите время как 1:23 или 1:23.450.'; field.input.focus(); return; }
+      lines.push({line: field.line, text: field.text, seconds});
+    }
+    const track = tracks.find(v => v.file.name === trackSelect.value);
+    pending = true; save.disabled = true; status.textContent = 'Сохраняю…';
+    try {
+      await call('saveTimings', {folder: student.id, song: song.key, timings: lines.length ? {
+        version: 1, track: track.file.name, trackSize: track.file.size, trackModified: track.file.modified,
+        lyrics: song.lyrics.name, lyricsModified: song.lyrics.modified, lines,
+      } : null});
+      dialog.close(); await route(true, true); toast('Таймкоды сохранены');
+    } catch (error) { status.textContent = error.status === 409 ? 'Материалы изменились. Обновите страницу и настройте таймкоды заново.' : error.message; }
+    finally { pending = false; save.disabled = false; }
+  }}, 'Сохранить таймкоды');
+  const dialog = h('dialog', {class: 'archive-dialog timing-dialog'}, h('h2', {}, 'Таймкоды строк'),
+    h('p', {class: 'muted small'}, 'Выберите минус. Укажите время нужных строк или нажмите «Сейчас» во время прослушивания. Пустые поля останутся без привязки.'),
+    trackSelect, h('button', {class: 'btn small', onclick: () => player.play(song, tracks.find(v => v.file.name === trackSelect.value), student)}, 'Слушать минус'),
+    old.reason && h('p', {class: 'timing-warning'}, old.reason), h('div', {class: 'timing-fields'}, fields.map(field => field.row)), status,
+    h('div', {class: 'student-actions'}, h('button', {class: 'btn ghost', onclick: () => {if (!pending) dialog.close();}}, 'Закрыть'), save));
+  dialog.addEventListener('cancel', event => {if (pending) event.preventDefault();});
+  dialog.addEventListener('close', () => dialog.remove(), {once:true});
+  document.body.append(dialog); dialog.showModal();
 }
 
 function variantHelp(v) {
@@ -554,15 +669,17 @@ function songCard(song, student, { owner = false, heading = 'h2' } = {}) {
   // Редактор: пока он открыт, окна для чтения и ссылки скрыты.
   const editBox = h('div', { class: 'editor', hidden: true });
   const links = h('div', { class: 'song-links' }, reader.controls,
-    canEditSpace(role, ownId, student) && h('button', { class: 'link-btn', onclick: () => setEditing(true) }, 'Изменить'));
+    canEditLyrics(student) && h('button', { class: 'link-btn', onclick: () => setEditing(true) }, canEditSpace(role, ownId, student) ? 'Изменить' : 'Изменить текст'));
   function setEditing(on) {
-    if (on && !canEditSpace(role, ownId, student)) return;
+    if (on && !canEditLyrics(student)) return;
     openEditor = on ? editorKey : null;
     editBox.hidden = !on;
     links.hidden = on;
     if (on) {
       reader.close();
-      editBox.replaceChildren(songEditor(song, student, { onClose: () => setEditing(false) }));
+      editBox.replaceChildren(canEditSpace(role, ownId, student)
+        ? songEditor(song, student, { onClose: () => setEditing(false) })
+        : sharedLyricsEditor(song, student, () => setEditing(false)));
     } else {
       editBox.replaceChildren();
     }
@@ -575,17 +692,51 @@ function songCard(song, student, { owner = false, heading = 'h2' } = {}) {
       owner ? h('span', { class: 'owner' }, student.name) : null),
     impulseBlock(song, student),
     song.variants.length
-      ? h('div', { class: 'variants' }, song.variants.map(v =>
-        h('button', {
+      ? h('div', { class: 'variants' }, song.variants.map(v => {
+        const download = h('button', {class: 'variant-download btn small', title: `Скачать ${variantName(v)}`, 'aria-label': `Скачать ${variantName(v)}`,
+          onclick: () => downloadVariant(student, v, download)}, '↓ Скачать');
+        return h('div', {class: 'variant-slot'}, h('button', {
           class: `chip ${v.kind}`, 'data-id': `${student.id}|${v.file.name}`,
           onclick: () => player.play(song, v, student),
-        }, h('span', { class: 'variant-label' }, variantName(v)), h('span', { class: 'variant-help' }, variantHelp(v)))))
+        }, h('span', { class: 'variant-label' }, variantName(v)), h('span', { class: 'variant-help' }, variantHelp(v))), download);
+      }))
       : h('p', { class: 'muted' }, canEditSpace(role, ownId, student) ? 'Нет аудио — добавьте вариант в «Изменить».' : 'Преподаватель ещё не добавил аудиозапись.'),
     h('div', { class: 'song-wave', hidden: true }, h('canvas', { class: 'waveform-canvas', role: 'img', 'aria-label': `Волновая форма: ${song.title}` })),
     song.meta.notes ? h('div', { class: 'notes' }, h('div', { class: 'pane-title' }, 'Заметки'), song.meta.notes) : null,
     links, reading, editBox);
   if (openEditor === editorKey) setEditing(true);
   return card;
+}
+
+function sharedLyricsEditor(song, student, onClose) {
+  const editor = lyricsEditorBox();
+  let original = '', ready = !song.lyrics, pending = false;
+  const status = h('p', {role: 'status', class: 'muted small'});
+  if (song.lyrics) {
+    editor.setLoading(true);
+    fileText(student.id, song.lyrics.name).then(value => {
+      editor.setValue(value); original = editor.getValue(); ready = true;
+    }).catch(error => { status.textContent = error.message; }).finally(() => editor.setLoading(false));
+  }
+  const dirty = () => ready && editor.getValue() !== original;
+  dirtyEditors.add(dirty);
+  const close = () => { dirtyEditors.delete(dirty); onClose(); };
+  const save = h('button', {class: 'btn primary', onclick: async () => {
+    if (!ready || pending) return;
+    pending = true; save.disabled = true; status.textContent = 'Сохраняю текст…';
+    try {
+      await call('saveLyrics', {folder: student.id, name: song.lyrics?.name || `${song.title}.txt`,
+        text: editor.getValue(), ...(song.lyrics ? {expectedModified: song.lyrics.modified} : {})});
+      close(); await route(true, true); toast('Текст сохранён');
+    } catch (error) { status.textContent = error.status === 409 ? 'Текст уже изменён на другом устройстве. Скопируйте свои правки и обновите страницу.' : error.message; }
+    finally { pending = false; save.disabled = false; }
+  }}, 'Сохранить текст');
+  return h('div', {class: 'editor-inner'}, h('h3', {}, 'Текст общей песни'), editor.el, status,
+    h('div', {class: 'editor-footer'}, h('button', {class: 'btn ghost', onclick: () => {
+      if (pending) return;
+      if (dirty() && !confirm('Закрыть без сохранения?')) return;
+      close();
+    }}, 'Отмена'), save));
 }
 
 // Все файлы песни (аудио + текст) — для копирования и удаления.
@@ -671,13 +822,22 @@ function lyricsEditorBox(placeholder = 'Вставьте сюда текст п�
       picker.value = hex; value.value = hex; cmd(command, hex);
     };
     value.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); apply(); } });
-    return h('fieldset', {class: 'format-color-group'}, h('legend', {}, title),
+    const popup = h('details', {class: 'format-color-popup'},
+      h('summary', {class: 'tool', title, 'aria-label': title, onpointerdown: () => {
+        const selection = getSelection();
+        if (selection.rangeCount && area.contains(selection.getRangeAt(0).commonAncestorContainer)) savedRange = selection.getRangeAt(0).cloneRange();
+      }}, h('span', {class: 'palette-icon', 'aria-hidden': 'true'}, command === 'foreColor' ? '✎' : '▰'), title),
+      h('fieldset', {class: 'format-color-group'}, h('legend', {}, title),
       h('div', {class: 'format-color-presets'}, palette.map(color => tool(
         h('span', {class: 'format-swatch', style: `background-color:${color.hex}`}), `${title}: ${color.name}`,
         () => { picker.value = color.hex; value.value = color.hex; cmd(command, color.hex); }))),
       h('div', {class: 'format-color-custom'}, picker, value, tool('Применить', `Применить ${title.toLowerCase()}`, apply)),
       command === 'hiliteColor' ? tool('Без маркера', 'Убрать только цвет маркера', () => cmd(command, 'transparent'))
-        : tool('Обычный цвет', 'Вернуть обычный цвет букв', () => cmd(command, getComputedStyle(area).color)));
+        : tool('Обычный цвет', 'Вернуть обычный цвет букв', () => cmd(command, getComputedStyle(area).color))));
+    popup.addEventListener('toggle', () => {
+      if (popup.open) popup.parentElement?.querySelectorAll('.format-color-popup').forEach(other => { if (other !== popup) other.open = false; });
+    });
+    return popup;
   };
   const toolbar = h('div', { class: 'toolbar-fmt' },
     h('div', {class: 'format-main'},
@@ -1079,9 +1239,14 @@ const player = (() => {
     return selected.recovery;
   }
 
-  async function play(song, v, student) {
+  async function play(song, v, student, {seekTo = null} = {}) {
     const id = `${student.id}|${v.file.name}`;
     if (current && current.id === id) {
+      if (seekTo != null) {
+        current.seekTo = seekTo;
+        if (current.url) { timeline.seekTo(seekTo); await startAudio(); }
+        return;
+      }
       return toggleAudio();
     }
     const my = ++token;
@@ -1092,7 +1257,7 @@ const player = (() => {
     audio.pause();
     playbackSession(); primeAudio(audio);
     metro.setGrid(0, 0);
-    current = { id, song, v, student, url: null };
+    current = { id, song, v, student, url: null, seekTo };
     dl.removeAttribute('href');
     timeline.reset();
     bar.hidden = false;
@@ -1116,6 +1281,9 @@ const player = (() => {
       const wasRate = audio.playbackRate;
       audio.src = url;
       audio.playbackRate = wasRate;
+      if (current.seekTo != null) audio.addEventListener('loadedmetadata', () => {
+        if (my === token && current.seekTo != null) timeline.seekTo(current.seekTo);
+      }, {once:true, signal: playbackController.signal});
       if (metro.on) loadTempo();
       dl.href = url;
       if ('mediaSession' in navigator) {
@@ -1135,6 +1303,8 @@ const player = (() => {
   // ---------- Метроном ----------
   const metro = new Metronome(audio);
   const metroBtn = $('.p-metro-btn'), metroBox = $('.p-metro');
+  const beatControls = beatMaskControls(metro, 'songs:metro:mask:song');
+  metroBox.append(beatControls.el);
   const mBpm = metroBox.querySelector('.m-bpm'), mStatus = metroBox.querySelector('.m-status'), mDot = metroBox.querySelector('.m-dot');
   const tapBtn = metroBox.querySelector('[data-act="tapTempo"]');
   const bpmInput = metroBox.querySelector('.m-bpm-input');
@@ -1282,7 +1452,7 @@ const player = (() => {
   });
   for (const ev of ['pause', 'seeking', 'ratechange']) audio.addEventListener(ev, cancelTaps);
   metroBox.querySelector('.m-vol').addEventListener('input', e => metro.setVolume(Number(e.target.value)));
-  metro.onBeat = () => { mDot.classList.remove('beat'); void mDot.offsetWidth; mDot.classList.add('beat'); };
+  metro.onBeat = (slot, audible) => { beatControls.pulse(slot); mDot.classList.remove('beat'); if (audible) { void mDot.offsetWidth; mDot.classList.add('beat'); } };
   audio.addEventListener('ratechange', () => showBpm());
 
   playBtn.addEventListener('click', toggleAudio);
@@ -1292,7 +1462,14 @@ const player = (() => {
     audio.loop = !audio.loop;
     loopBtn.setAttribute('aria-pressed', String(audio.loop));
   });
-  speed.addEventListener('change', () => { audio.playbackRate = Number(speed.value); });
+  const speedLabel = $('.p-speed-value');
+  const setSpeed = value => {
+    const number = Math.min(1.5, Math.max(0.5, Number(value) || 1));
+    audio.playbackRate = number; speed.value = String(number); speedLabel.textContent = `${number.toFixed(2)}×`;
+  };
+  speed.addEventListener('input', () => setSpeed(speed.value));
+  $('.p-speed-reset').addEventListener('click', () => setSpeed(1));
+  dl.addEventListener('click', event => { event.preventDefault(); if (current) downloadVariant(current.student, current.v, dl); });
   $('.p-close').addEventListener('click', () => {
     playbackController?.abort();
     audio.pause();
@@ -1353,13 +1530,19 @@ const player = (() => {
   // После перерисовки страницы подсветить играющий вариант.
   new MutationObserver(markActive).observe(main, { childList: true, subtree: true });
 
-  return { play, stopSongMetronome() { if (metro.on) metroBtn.click(); } };
+  return { play,
+    seekVariant(song, variant, student, seconds) { return play(song, variant, student, {seekTo: seconds}); },
+    stop() { if (current) $('.p-close').click(); },
+    restrictTo(spaces) { if (current && !spaces.some(space => space.id === current.student.id)) $('.p-close').click(); },
+    positionFor(student, song, filename = null) { return current?.student.id === student.id && current?.song.key === song.key && (!filename || current?.v.file.name === filename) ? audio.currentTime : null; },
+    stopSongMetronome() { if (metro.on) metroBtn.click(); } };
 })();
 
 // Виджет находится вне перерисовываемой библиотеки и остаётся на экране
 // при поиске, прокрутке, переходах к ученикам и закрытии плеера.
 const standalone = (() => {
   const metro = new StandaloneMetronome();
+  const beatControls = beatMaskControls(metro, 'songs:metro:mask:standalone');
   const savedPattern = localGet('songs:standalone:pattern');
   metro.setPattern(Object.hasOwn(DRUM_PATTERNS, savedPattern) ? savedPattern : 'click');
   const storedTempo = Number(localGet('songs:standalone:bpm'));
@@ -1390,7 +1573,8 @@ const standalone = (() => {
         toggle,
         h('input', { class: 'm-vol', type: 'range', min: 0, max: 1, step: 0.05, value: metro.volume, 'aria-label': 'Громкость самостоятельного метронома', oninput: e => {
           metro.setVolume(Number(e.target.value)); localSet('songs:standalone:volume', metro.volume);
-        } }))));
+        } }))), beatControls.el,
+    h('p', {class: 'metro-background-note muted small'}, 'Щелчки в браузере могут прерваться при блокировке экрана.'));
   main.before(widget);
   function update() { toggle.textContent = metro.on ? 'Остановить' : 'Запустить'; toggle.setAttribute('aria-pressed', String(metro.on)); }
   function stop() { metro.stop(); dot.classList.remove('beat'); update(); }
@@ -1403,9 +1587,14 @@ const standalone = (() => {
   }
   bpm.addEventListener('change', () => setTempo(bpm.value));
   bpm.addEventListener('keydown', e => { if (e.key === 'Enter') { setTempo(bpm.value); bpm.blur(); } });
-  metro.onBeat = () => { dot.classList.remove('beat'); void dot.offsetWidth; dot.classList.add('beat'); };
+  metro.onBeat = (slot, audible) => { beatControls.pulse(slot); dot.classList.remove('beat'); if (audible) { void dot.offsetWidth; dot.classList.add('beat'); } };
   window.addEventListener('pagehide', stop);
-  return { stop, setVisible(visible) { widget.hidden = !visible; if (!visible) stop(); } };
+  return { stop, setVisible(visible) {
+    widget.hidden = !visible;
+    pattern.hidden = role !== 'teacher';
+    if (role !== 'teacher' && metro.pattern !== 'click') { metro.setPattern('click'); pattern.value = 'click'; }
+    if (!visible) stop();
+  } };
 })();
 
 route();

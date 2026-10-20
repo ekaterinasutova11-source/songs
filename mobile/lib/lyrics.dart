@@ -119,8 +119,9 @@ List<LyricRun> parseLyrics(String markup) {
 }
 
 class FormattedLyrics extends StatelessWidget {
-  const FormattedLyrics(this.text, {super.key});
+  const FormattedLyrics(this.text, {super.key, this.style});
   final String text;
+  final TextStyle? style;
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
@@ -149,7 +150,9 @@ class FormattedLyrics extends StatelessWidget {
             TextSpan(
               text: run.text,
               style: TextStyle(
-                fontWeight: run.bold ? FontWeight.w700 : FontWeight.w400,
+                fontWeight: run.bold
+                    ? FontWeight.w700
+                    : style?.fontWeight ?? FontWeight.w400,
                 fontStyle: run.italic ? FontStyle.italic : FontStyle.normal,
                 decoration: run.underline
                     ? TextDecoration.underline
@@ -162,7 +165,7 @@ class FormattedLyrics extends StatelessWidget {
             ),
         ],
       ),
-      style: const TextStyle(height: 1.9, fontSize: 16),
+      style: const TextStyle(height: 1.9, fontSize: 16).merge(style),
     );
   }
 }

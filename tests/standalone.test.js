@@ -48,6 +48,19 @@ test('accepts 1 through 999 BPM and rejects invalid input', () => {
   for (const bpm of [1, 20, 120.5, 400, 999]) { metro.setTempo(bpm); assert.equal(metro.bpm, bpm); }
   for (const bpm of [0, -1, 1000, NaN, Infinity]) assert.throws(() => metro.setTempo(bpm), RangeError);
 });
+
+test('standalone muted beat slots keep the original clock and resume on the next cycle', () => {
+  const {metro,ctx,clicks}=setup();
+  metro.setBeatMask([true,false,true]);
+  try {
+    metro.start();const offset=metro.offset;
+    for(const time of [10.5,11,11.5,12,12.5]) {ctx.currentTime=time;metro.schedule();}
+    assert.equal(clicks.length,4);
+    assert.ok(Math.abs(clicks[1]-clicks[0]-1)<1e-9);
+    assert.equal(metro.offset,offset);
+    assert.equal(new Set(clicks).size,clicks.length);
+  } finally {metro.stop();}
+});
 for (const pattern of Object.keys(DRUM_PATTERNS).filter(id => id !== 'click')) {
   test(`${pattern}: exact repeating bars without missing or duplicated hits`, () => {
     const { metro, ctx } = setup();

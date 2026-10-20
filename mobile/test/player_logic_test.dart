@@ -87,6 +87,59 @@ void main() {
     expect(playbackTime(const Duration(hours: 1, seconds: 2)), '60:02');
   });
 
+  test('continuous speed accepts half to one-and-a-half and reset', () async {
+    final controller = PlayerController();
+    await controller.setSpeed(.5);
+    expect(controller.speed, .5);
+    await controller.setSpeed(.87);
+    expect(controller.speed, .87);
+    await controller.setSpeed(1.5);
+    expect(controller.speed, 1.5);
+    await controller.setSpeed(double.nan);
+    await controller.setSpeed(2);
+    expect(controller.speed, 1.5);
+    await controller.setSpeed(1);
+    expect(controller.speed, 1);
+    controller.dispose();
+  });
+
+  test(
+    'timestamp without known duration reports an error without native playback',
+    () async {
+      final controller = PlayerController();
+      await controller.seekAndPlay(const Duration(seconds: 10));
+      expect(controller.isPlaying, false);
+      expect(controller.error, contains('длительность'));
+      controller.dispose();
+    },
+  );
+
+  test('track identity and start timestamp are cancelled on logout', () async {
+    final api = PendingMediaApi();
+    final controller = PlayerController();
+    final load = controller.playVariant(
+      api,
+      session,
+      'test-folder',
+      song,
+      variant,
+      startAt: const Duration(seconds: 25),
+    );
+    await api.started.future;
+    expect(controller.playingFolderId, 'test-folder');
+    expect(controller.playingFileName, variant.file.name);
+    await controller.stop();
+    api.response.complete(
+      Uri.parse('https://135.106.183.211/media?token=fake-test'),
+    );
+    await load;
+    expect(controller.playingFolderId, isNull);
+    expect(controller.playingFileName, isNull);
+    expect(controller.hasTrack, false);
+    controller.dispose();
+    api.close();
+  });
+
   testWidgets('empty player never initializes native plugins', (tester) async {
     final controller = PlayerController();
     await tester.pumpWidget(

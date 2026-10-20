@@ -1,10 +1,18 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 import 'package:unorm_dart/unorm_dart.dart' as unorm;
 
 const serverOrigin = 'https://135.106.183.211';
+String buildFileName(String title, String kind, String label, String ext) {
+  final suffix = label.trim();
+  if (kind == 'orig') {
+    return '${title.trim()} (${suffix.isEmpty ? 'оригинал' : suffix})$ext';
+  }
+  return '${title.trim()} ${kind == 'plus' ? '+' : '-'}${suffix.isEmpty ? '' : ' ($suffix)'}$ext';
+}
 
 /// A personal link's route. Never includes the original URL in diagnostics.
 class Session {
@@ -328,8 +336,8 @@ ApiFailure _httpFailure(int status) => ApiFailure(status, switch (status) {
   401 || 403 =>
     'Доступ закрыт или ссылка недействительна. Обратитесь к преподавателю.',
   404 => 'Материал больше не найден. Обновите список песен.',
-  400 => 'Проверьте имя: оно не должно содержать служебные символы.',
-  409 => 'Такое имя уже существует. Проверьте список учеников.',
+  400 => 'Проверьте введённые данные и название.',
+  409 => 'Материалы уже изменились или такое название существует. Обновите список перед повтором.',
   _ => 'Сервер временно недоступен. Попробуйте ещё раз.',
 });
 
@@ -427,6 +435,136 @@ class SongsApi {
       );
     }
     await _call(session, 'createStudent', {'name': trimmed});
+  }
+
+  Future<void> saveLyrics(
+    Session session,
+    String folder,
+    String name,
+    String text,
+    String? modified,
+  ) async {
+    await _call(session, 'saveLyrics', {
+      'folder': folder,
+      'name': name,
+      'text': text,
+      'expectedModified': modified,
+    });
+  }
+
+  Future<void> editSong(
+    Session session,
+    String folder,
+    String song,
+    Map<String, dynamic> edits,
+  ) async {
+    await _call(session, 'editSong', {
+      'folder': folder,
+      'song': song,
+      ...edits,
+    });
+  }
+
+  Future<void> saveTimings(
+    Session session,
+    String folder,
+    String song,
+    Map<String, dynamic>? timings,
+  ) async {
+    await _call(session, 'saveTimings', {
+      'folder': folder,
+      'song': song,
+      'timings': timings,
+    });
+  }
+
+  Future<void> teacherAction(
+    Session session,
+    String action,
+    Map<String, dynamic> params,
+  ) async {
+    if (!session.isTeacher) {
+      throw const ApiFailure(403, 'Это действие доступно преподавателю.');
+    }
+    await _call(session, action, params);
+  }
+
+  Future<Uint8List> download(
+    Session session,
+    String folder,
+    SongFile file,
+  ) async {
+    final uri = await mediaUrl(session, folder, file.name);
+    final request = http.Request('GET', uri)..followRedirects = false;
+    final response = await _client
+        .send(request)
+        .timeout(const Duration(seconds: 30));
+    if (response.statusCode != 200) throw _httpFailure(response.statusCode);
+    if ((response.contentLength ?? 0) > 268435456) {
+      throw const ApiFailure(413, 'Файл слишком большой для скачивания.');
+    }
+    final bytes = BytesBuilder(copy: false);
+    await for (final chunk in response.stream.timeout(
+      const Duration(seconds: 60),
+    )) {
+      if (bytes.length + chunk.length > 268435456) {
+        throw const ApiFailure(413, 'Файл слишком большой для скачивания.');
+      }
+      bytes.add(chunk);
+    }
+    final result = bytes.takeBytes();
+    if (file.size > 0 && result.length != file.size) {
+      throw const ApiFailure(
+        409,
+        'Запись изменилась. Обновите материалы и скачайте заново.',
+      );
+    }
+    return result;
+  }
+
+  Future<void> upload(
+    Session session,
+    String folder,
+    String name,
+    Uint8List bytes, {
+    bool overwrite = false,
+    bool Function()? canContinue,
+  }) async {
+    if (canContinue?.call() == false) {
+      throw const ApiFailure(403, 'Вход изменился.');
+    }
+    if (!session.isTeacher) {
+      throw const ApiFailure(403, 'Аудиофайлы меняет преподаватель.');
+    }
+    if (bytes.isEmpty || bytes.length > 268435456) {
+      throw const ApiFailure(413, 'Допустим файл до 256 МБ.');
+    }
+    final ticket = await _call(session, 'uploadUrl', {
+      'folder': folder,
+      'name': name,
+      'overwrite': overwrite,
+    });
+    if (canContinue?.call() == false) {
+      throw const ApiFailure(403, 'Вход изменился.');
+    }
+    final uri = Uri.tryParse(ticket['href'] as String? ?? '');
+    if (uri == null ||
+        uri.origin != serverOrigin ||
+        uri.path != '/upload' ||
+        uri.userInfo.isNotEmpty) {
+      throw const ApiFailure(
+        502,
+        'Не удалось получить безопасный адрес загрузки.',
+      );
+    }
+    final request = http.Request('PUT', uri)
+      ..followRedirects = false
+      ..bodyBytes = bytes;
+    final response = await _client
+        .send(request)
+        .timeout(const Duration(minutes: 3));
+    await response.stream.drain<void>();
+    if (response.statusCode != 200) throw _httpFailure(response.statusCode);
   }
 
   Future<Uri> mediaUrl(Session session, String folder, String name) async {

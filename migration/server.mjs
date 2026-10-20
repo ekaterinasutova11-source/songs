@@ -7,6 +7,7 @@ import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { Store, HttpError, META_NAME, cleanName, existingName, cleanPatch, digest, newKey } from './local-store.mjs';
 import { pathToFileURL } from 'node:url';
+import { saveLyrics, saveTimings, renameSong } from './song-editing.mjs';
 
 const safeEqual = (a, b) => typeof a === 'string' && typeof b === 'string' && crypto.timingSafeEqual(Buffer.from(digest(a)), Buffer.from(digest(b)));
 const dictionary = value => Object.assign(Object.create(null), value || {});
@@ -81,6 +82,32 @@ export function createApp({ directory, teacherKey, signingKey, baseUrl, readOnly
     assertWritable();
     return store.transaction(() => {
       switch (action) {
+        case 'editSong': {
+          const id=songKey(body.song), folder=folderFor(auth,body.folder);
+          if (!auth.teacher && (body.name !== undefined || body.patch !== undefined)) throw new HttpError(403,'Ученику доступно редактирование текста');
+          if (body.lyrics) saveLyrics(store,folder,body.lyrics);
+          if (auth.teacher && body.patch) {
+            const meta=store.meta(folder.id); meta.songs??={};
+            const patch=cleanPatch({notes:body.patch.notes,translation:body.patch.translation});
+            for(const key of Object.keys(patch)) if(body.expectedPatch && Object.hasOwn(body.expectedPatch,key) && (meta.songs[id]?.[key]??'')!==body.expectedPatch[key]) throw new HttpError(409,'Заметки или перевод уже изменились. Обновите песню');
+            meta.songs[id]={...(meta.songs[id]||{}),...patch}; store.saveMeta(folder.id,meta);
+          }
+          if(auth.teacher && body.name) renameSong(store,folder,{song:id,name:body.name});
+          break;
+        }
+        case 'renameSong': {
+          teacherOnly(auth); songKey(body.song);
+          renameSong(store, folderFor(auth, body.folder, true), body); break;
+        }
+        case 'saveLyrics': {
+          const folder = folderFor(auth, body.folder);
+          saveLyrics(store, folder, body); break;
+        }
+        case 'saveTimings': {
+          songKey(body.song);
+          const folder = folderFor(auth, body.folder);
+          saveTimings(store, folder, body); break;
+        }
         case 'setSpaceMembers': {
           teacherOnly(auth);
           store.setMembers(body.folder, body.kind, body.members); break;

@@ -104,6 +104,28 @@ test('no click while audio is buffering', () => {
   const { m, audio, nodes } = setup(); audio.readyState = 2; m.schedule(); assert.equal(nodes.length, 0);
 });
 
+test('muting song beats leaves the absolute grid and phase intact across seek', () => {
+  const {m,audio,ctx,nodes} = setup();
+  m.setGrid(120,1.1); m.setBeatMask([true,false,true]);
+  const offset = m.offset;
+  for (const time of [1,1.5,2,2.5]) {audio.currentTime=time;ctx.currentTime=10+time;m.schedule();}
+  assert.equal(nodes.length,3);
+  assert.equal(m.offset,offset);
+  audio.currentTime=1.5;audio.emit('seeked');m.schedule();
+  assert.equal(nodes.length,3,'muted second beat stays silent after seek');
+  m.setBeatMask([false,false,false]);
+  audio.currentTime=3;ctx.currentTime=13;m.schedule();
+  assert.equal(nodes.length,3,'fully muted cycle still advances without sound');
+  assert.equal(m.offset,offset);
+  m.stop();
+});
+
+test('beat masks accept 1 through 12 and reject malformed values', () => {
+  const {m} = setup();
+  for (let length=1;length<=12;length++) {m.setBeatMask(Array(length).fill(true)); assert.equal(m.beatMask.length,length);}
+  for (const value of [[],Array(13).fill(true),[1],null]) assert.throws(()=>m.setBeatMask(value),RangeError);
+});
+
 test('starting the song metronome leaves music on native audio for background playback', () => {
   const oldWindow = globalThis.window;
   let routed = false;

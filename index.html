@@ -10,7 +10,7 @@
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎵</text></svg>">
   <link rel="stylesheet" href="assets/fonts/fonts.css?v=local1">
   <link rel="stylesheet" href="style.css?v=garden1">
-  <link rel="stylesheet" href="garden.css?v=format2">
+  <link rel="stylesheet" href="garden.css?v=practice1">
 </head>
 <body>
   <header class="studio-header">
@@ -74,12 +74,10 @@
       <button class="p-btn small p-loop" aria-label="Повторять песню" aria-pressed="false" title="Повторять">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v3l4-4-4-4v3H5v6h2zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2z"/></svg>
       </button>
-      <select class="p-speed" aria-label="Скорость" title="Скорость (тон не меняется)">
-        <option value="0.75">0.75×</option>
-        <option value="0.85">0.85×</option>
-        <option value="1" selected>1×</option>
-        <option value="1.1">1.1×</option>
-      </select>
+      <label class="p-speed-control"><span class="p-speed-value">1.00×</span>
+        <input class="p-speed" type="range" min="0.5" max="1.5" step="0.01" value="1" aria-label="Скорость воспроизведения" title="Скорость (тон не меняется)">
+      </label>
+      <button class="p-speed-reset" type="button" aria-label="Вернуть обычную скорость">1×</button>
       <a class="p-btn small p-dl" download aria-label="Скачать аудио" title="Скачать">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4h2v9l3.5-3.5 1.4 1.4L12 16.8l-5.9-5.9 1.4-1.4L11 13zM5 18h14v2H5z"/></svg>
       </a>
@@ -89,6 +87,6 @@
     </div>
   </div>
 
-  <script type="module" src="app.js?v=format2"></script>
+  <script type="module" src="app.js?v=practice1"></script>
 </body>
 </html>

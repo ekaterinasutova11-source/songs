@@ -39,6 +39,8 @@ class PlayerController extends ChangeNotifier {
   Duration _duration = Duration.zero;
   String? _title;
   String? _variant;
+  String? _folderId;
+  String? _fileName;
   String? _error;
   double _speed = 1;
   bool _repeat = false;
@@ -47,6 +49,8 @@ class PlayerController extends ChangeNotifier {
   bool get hasTrack => _title != null;
   String? get songTitle => _title;
   String? get variantName => _variant;
+  String? get playingFolderId => _folderId;
+  String? get playingFileName => _fileName;
   String? get error => _error;
   bool get isLoading => _loading;
   bool get isPlaying => _playing;
@@ -112,6 +116,9 @@ class PlayerController extends ChangeNotifier {
         onAccessDenied?.call();
         return;
       }
+    } else if (failure is TimeoutException) {
+      _error =
+          'Запись не ответила вовремя. Проверьте интернет и повторите переход.';
     } else {
       // Native error messages can contain a signed URL; never expose them.
       _error = 'Запись недоступна. Проверьте интернет и нажмите «Повторить».';
@@ -124,19 +131,23 @@ class PlayerController extends ChangeNotifier {
     Session session,
     String folder,
     Song song,
-    AudioVariant variant,
-  ) async {
+    AudioVariant variant, {
+    Duration startAt = Duration.zero,
+  }) async {
     if (_disposed) return;
     final generation = ++_generation;
     _title = song.title;
     _variant = variant.displayName;
+    _folderId = folder;
+    _fileName = variant.file.name;
     _position = Duration.zero;
     _duration = Duration.zero;
     _ready = false;
     _loading = true;
     _playing = false;
     _error = null;
-    _retry = () => playVariant(api, session, folder, song, variant);
+    _retry = () =>
+        playVariant(api, session, folder, song, variant, startAt: startAt);
     _changed();
     try {
       // Stop the old audio before requesting the new signed ticket.
@@ -151,24 +162,57 @@ class PlayerController extends ChangeNotifier {
       await _serialize(() async {
         if (!_current(generation)) return;
         final player = _player();
-        final total = await player.setAudioSource(
-          AudioSource.uri(
-            uri,
-            tag: MediaItem(
-              // Public metadata never includes the personal key or signed URL.
-              id: Uri(pathSegments: [folder, variant.file.name]).toString(),
-              title: song.title,
-              artist: variant.displayName,
-              album: 'Сад звука',
-              artUri: artwork,
-            ),
-          ),
-        );
+        final total = await player
+            .setAudioSource(
+              AudioSource.uri(
+                uri,
+                tag: MediaItem(
+                  // Public metadata never includes the personal key or signed URL.
+                  id: Uri(pathSegments: [folder, variant.file.name]).toString(),
+                  title: song.title,
+                  artist: variant.displayName,
+                  album: 'Сад звука',
+                  artUri: artwork,
+                ),
+              ),
+            )
+            .timeout(
+              const Duration(seconds: 30),
+              onTimeout: () async {
+                await player.stop();
+                throw TimeoutException('Загрузка записи');
+              },
+            );
         if (!_current(generation)) return;
         await player.setSpeed(_speed);
         await player.setLoopMode(_repeat ? LoopMode.one : LoopMode.off);
         if (!_current(generation)) return;
         _duration = total ?? player.duration ?? Duration.zero;
+        if (startAt > Duration.zero) {
+          if (_duration <= Duration.zero) {
+            _duration = await player.durationStream
+                .firstWhere((value) => value != null && value > Duration.zero)
+                .then((value) => value!)
+                .timeout(
+                  const Duration(seconds: 10),
+                  onTimeout: () => throw const ApiFailure(
+                    422,
+                    'Не удалось определить длительность записи для перехода. Повторите загрузку.',
+                  ),
+                );
+          }
+          if (!_current(generation)) return;
+          if (startAt >= _duration) {
+            throw const ApiFailure(
+              422,
+              'Таймкод выходит за длительность записи.',
+            );
+          }
+          final target = boundedSeek(startAt, _duration);
+          await player.seek(target).timeout(const Duration(seconds: 10));
+          if (!_current(generation)) return;
+          _position = target;
+        }
         _ready = true;
         _loading = false;
         _changed();
@@ -229,17 +273,56 @@ class PlayerController extends ChangeNotifier {
     }
   }
 
+  /// A timestamp click resumes even a paused track. Native work stays serialized.
+  Future<void> seekAndPlay(Duration requested) async {
+    if (_disposed) return;
+    if (!canSeek) {
+      _error = _loading ? 'Дождитесь загрузки записи и нажмите время ещё раз.' : 'Не удалось определить длительность записи. Выберите запись заново.';
+      _changed();
+      return;
+    }
+    if (requested >= _duration) {
+      _error = 'Таймкод выходит за длительность записи.';
+      _changed();
+      return;
+    }
+    final generation = _generation;
+    final target = boundedSeek(requested, _duration);
+    try {
+      await _serialize(() async {
+        if (!_current(generation)) return;
+        final player = _native!;
+        await player
+            .seek(target)
+            .timeout(
+              const Duration(seconds: 10),
+              onTimeout: () async {
+                await player.pause();
+                throw TimeoutException('Переход по времени');
+              },
+            );
+        if (!_current(generation)) return;
+        _position = target;
+        _error = null;
+        _changed();
+        _startPlayback(player, generation);
+      });
+    } catch (failure) {
+      _failed(failure, generation);
+    }
+  }
+
   Future<void> skip(int seconds) =>
       seekTo(position + Duration(seconds: seconds));
 
   Future<void> setSpeed(double value) async {
-    if (![0.75, 1.0, 1.25].contains(value) || _disposed) return;
-    _speed = value;
+    if (!value.isFinite || value < 0.5 || value > 1.5 || _disposed) return;
+    _speed = (value * 100).round() / 100;
     _changed();
     final generation = _generation;
     try {
       await _serialize(() async {
-        if (_current(generation)) await _native?.setSpeed(value);
+        if (_current(generation)) await _native?.setSpeed(_speed);
       });
     } catch (failure) {
       _failed(failure, generation);
@@ -271,6 +354,8 @@ class PlayerController extends ChangeNotifier {
         null; // Drop references to the session on logout/access revocation.
     _title = null;
     _variant = null;
+    _folderId = null;
+    _fileName = null;
     _ready = false;
     _loading = false;
     _playing = false;
@@ -455,18 +540,26 @@ class _SongsPlayerState extends State<SongsPlayer> {
                     onPressed: player.toggleRepeat,
                     icon: const Icon(Icons.repeat_one),
                   ),
-                  PopupMenuButton<double>(
-                    tooltip: 'Скорость воспроизведения',
-                    initialValue: player.speed,
-                    onSelected: player.setSpeed,
-                    itemBuilder: (_) => [
-                      for (final value in [0.75, 1.0, 1.25])
-                        PopupMenuItem(value: value, child: Text('$value×')),
-                    ],
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Text('${player.speed}×'),
+                ],
+              ),
+              Row(
+                children: [
+                  const Icon(Icons.speed),
+                  Expanded(
+                    child: Slider(
+                      key: const ValueKey('playback-speed'),
+                      min: .5,
+                      max: 1.5,
+                      divisions: 100,
+                      value: player.speed,
+                      label: '${player.speed.toStringAsFixed(2)}×',
+                      onChanged: (value) => unawaited(player.setSpeed(value)),
                     ),
+                  ),
+                  Text('${player.speed.toStringAsFixed(2)}×'),
+                  TextButton(
+                    onPressed: () => unawaited(player.setSpeed(1)),
+                    child: const Text('1×'),
                   ),
                 ],
               ),

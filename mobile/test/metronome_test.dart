@@ -4,244 +4,211 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:songs/metronome.dart';
 
-class FakeOutput implements MetronomeOutput {
-  int preparations = 0;
-  int stops = 0;
-  int disposals = 0;
-  final clicks = <({bool accent, double volume})>[];
-  Completer<void>? preparation;
-  Completer<void>? clickCompletion;
+class FakeBackend implements MetronomeBackend {
+  final bus = StreamController<Map<String, dynamic>>.broadcast(sync: true);
+  int starts = 0, stops = 0, generation = 0;
+  bool running = false;
+  MetronomeSettings config = MetronomeSettings();
+  Completer<void>? startGate, updateGate;
+  final updates = <MetronomeSettings>[];
   @override
-  Future<void> prepare() async {
-    preparations++;
-    await preparation?.future;
+  Stream<Map<String, dynamic>> get events => bus.stream;
+  Map<String, dynamic> get snapshot => {
+    ...config.toNative(),
+    'running': running,
+    'beat': 0,
+    'generation': generation,
+  };
+  @override
+  Future<Map<String, dynamic>> state() async => snapshot;
+  @override
+  Future<Map<String, dynamic>> start(MetronomeSettings settings) async {
+    starts++;
+    final token = ++generation;
+    config = settings;
+    final result = {
+      ...settings.toNative(),
+      'running': true,
+      'generation': token,
+    };
+    await startGate?.future;
+    if (token == generation) running = true;
+    bus.add(result);
+    return result;
   }
 
   @override
-  Future<void> click({required bool accent, required double volume}) async {
-    clicks.add((accent: accent, volume: volume));
-    await clickCompletion?.future;
+  Future<Map<String, dynamic>> update(MetronomeSettings settings) async {
+    updates.add(settings);
+    await updateGate?.future;
+    config = settings;
+    return snapshot;
   }
 
   @override
-  Future<void> silence() async {
+  Future<void> stop() async {
     stops++;
-  }
-
-  @override
-  Future<void> dispose() async {
-    disposals++;
-  }
-}
-
-class ManualTimer implements Timer {
-  ManualTimer(this.due, this.callback);
-  final Duration due;
-  final void Function() callback;
-  bool active = true;
-  int ticks = 0;
-  @override
-  bool get isActive => active;
-  @override
-  int get tick => ticks;
-  @override
-  void cancel() => active = false;
-  void fire() {
-    if (!active) return;
-    active = false;
-    ticks++;
-    callback();
-  }
-}
-
-class ManualClock {
-  Duration now = Duration.zero;
-  final timers = <ManualTimer>[];
-  Timer schedule(Duration delay, void Function() callback) {
-    final timer = ManualTimer(now + delay, callback);
-    timers.add(timer);
-    return timer;
-  }
-
-  int get activeTimers => timers.where((timer) => timer.isActive).length;
-  Future<void> advance(Duration duration) async {
-    await Future<void>.delayed(Duration.zero);
-    final target = now + duration;
-    while (true) {
-      final pending =
-          timers
-              .where((timer) => timer.isActive && timer.due <= target)
-              .toList()
-            ..sort((a, b) => a.due.compareTo(b.due));
-      if (pending.isEmpty) break;
-      now = pending.first.due;
-      pending.first.fire();
-      await Future<void>.delayed(Duration.zero);
-    }
-    now = target;
+    generation++;
+    running = false;
+    bus.add(snapshot);
   }
 }
 
 void main() {
-  late FakeOutput output;
-  late ManualClock clock;
+  late FakeBackend backend;
   late MetronomeController controller;
   setUp(() {
-    output = FakeOutput();
-    clock = ManualClock();
-    controller = MetronomeController(
-      initialBpm: 120,
-      output: output,
-      now: () => clock.now,
-      timerFactory: clock.schedule,
-    );
+    backend = FakeBackend();
+    controller = MetronomeController(backend: backend);
   });
-  tearDown(() => controller.dispose());
-
-  test('construction is silent; repeated start owns one timer and accents every fourth beat', () async {
-    expect(output.preparations, 0);
-    expect(clock.activeTimers, 0);
-    await Future.wait([
-      controller.start(),
-      controller.start(),
-      controller.start(),
-    ]);
-    await clock.advance(const Duration(seconds: 2));
-    expect(output.preparations, 1);
-    expect(output.clicks.length, 5);
-    expect(output.clicks.map((click) => click.accent), [
-      true,
-      false,
-      false,
-      false,
-      true,
-    ]);
-    expect(clock.activeTimers, 1);
-    await controller.stop();
-    await clock.advance(const Duration(seconds: 5));
-    expect(output.clicks.length, 5);
-    expect(clock.activeTimers, 0);
+  tearDown(() async {
+    controller.dispose();
+    await backend.bus.close();
   });
 
   test(
-    'tempo change cancels old deadline and does not add an immediate click',
+    'silent construction and repeated start own one native service',
     () async {
-      await controller.start();
-      await clock.advance(const Duration(milliseconds: 250));
-      controller.setBpm(60);
-      expect(clock.activeTimers, 1);
-      await clock.advance(const Duration(milliseconds: 999));
-      expect(output.clicks.length, 1);
-      await clock.advance(const Duration(milliseconds: 1));
-      expect(output.clicks.length, 2);
-      expect(controller.bpm, 60);
+      expect(backend.starts, 0);
+      expect(backend.bus.hasListener, false);
+      await Future.wait([
+        controller.start(),
+        controller.start(),
+        controller.start(),
+      ]);
+      expect(backend.starts, 1);
+      expect(controller.isRunning, true);
+      await controller.stop();
+      expect(controller.isRunning, false);
+      expect(backend.stops, 1);
     },
   );
 
-  test('stop during slow preparation prevents a late click or timer', () async {
-    output.preparation = Completer<void>();
+  test('muted beats remain in the one-to-twelve-beat grid', () async {
+    controller.setBeats(12);
+    controller.toggleBeat(1);
+    controller.toggleBeat(11);
+    await controller.start();
+    expect(backend.config.beats, 12);
+    expect(backend.config.activeBeats.length, 12);
+    expect(backend.config.activeBeats[1], false);
+    expect(backend.config.activeBeats[11], false);
+    controller.setBeats(1);
+    expect(controller.activeBeats, [true]);
+    controller.setBeats(99);
+    expect(controller.beats, 12);
+  });
+
+  test('pupils get clicks and teachers get all website rhythms', () {
+    controller.setPattern('rock');
+    expect(controller.pattern, 'click');
+    expect(() => MetronomeSettings(pattern: 'rock'), throwsArgumentError);
+    final teacher = MetronomeController(isTeacher: true, backend: backend);
+    for (final p in metronomePatterns) {
+      teacher.setPattern(p.id);
+      expect(teacher.pattern, p.id);
+    }
+    teacher.setPattern('unknown');
+    expect(teacher.pattern, 'rockfill');
+    expect(metronomePatterns.length, 12);
+    teacher.dispose();
+  });
+
+  test('late start result and event cannot restart after stop', () async {
+    backend.startGate = Completer<void>();
     final starting = controller.start();
     await Future<void>.delayed(Duration.zero);
-    final stopping = controller.stop();
-    output.preparation!.complete();
-    await Future.wait([starting, stopping]);
+    expect(backend.starts, 1);
+    await controller.stop();
+    backend.startGate!.complete();
+    await starting;
     expect(controller.isRunning, false);
     expect(controller.isStarting, false);
-    expect(output.clicks, isEmpty);
-    expect(clock.activeTimers, 0);
-  });
-
-  test('slow UI skips missed clicks instead of a burst', () async {
-    await controller.start();
-    await Future<void>.delayed(Duration.zero);
-    clock.now = const Duration(seconds: 4);
-    clock.timers.single.fire();
-    await Future<void>.delayed(Duration.zero);
-    expect(output.clicks.length, 2);
-    final pending = clock.timers.where((timer) => timer.isActive).single;
-    expect(pending.due, const Duration(milliseconds: 4500));
   });
 
   test(
-    'a slow native click cannot accumulate queued duplicate clicks',
+    'notification stop is reflected and stale generations are ignored',
     () async {
-      output.clickCompletion = Completer<void>();
       await controller.start();
-      await clock.advance(const Duration(seconds: 2));
-      expect(output.clicks.length, 1);
-      output.clickCompletion!.complete();
+      final old = backend.snapshot;
+      await backend.stop();
+      expect(controller.isRunning, false);
+      backend.bus.add({...old, 'running': true, 'beat': 2});
+      expect(controller.isRunning, false);
+    },
+  );
+
+  test(
+    'rapid tempo slider changes coalesce while native update is pending',
+    () async {
+      await controller.start();
+      backend.updateGate = Completer<void>();
+      for (var bpm = 90; bpm <= 190; bpm++) {
+        controller.setBpm(bpm);
+      }
+      expect(backend.updates.length, 1);
+      backend.updateGate!.complete();
       await Future<void>.delayed(Duration.zero);
-      expect(output.clicks.length, 1);
-      await clock.advance(const Duration(milliseconds: 500));
-      expect(output.clicks.length, 2);
+      expect(backend.updates.length, 2);
+      expect(backend.updates.last.bpm, 190);
     },
   );
 
   test(
-    'dispose cancels pending beats and frees audio without restarting',
+    'activity recreation restores native settings without restarting',
     () async {
-      await controller.start();
-      await clock.advance(Duration.zero);
-      controller.dispose();
-      await clock.advance(const Duration(seconds: 3));
-      expect(clock.activeTimers, 0);
-      expect(output.clicks.length, 1);
-      expect(output.disposals, 1);
-      await controller.start();
-      expect(output.preparations, 1);
+      backend.running = true;
+      backend.config = MetronomeSettings(
+        bpm: 152,
+        beats: 7,
+        activeBeats: [true, false, true, true, true, false, true],
+        volume: .25,
+      );
+      await controller.initialize();
+      expect(controller.isRunning, true);
+      expect(controller.bpm, 152);
+      expect(controller.beats, 7);
+      expect(controller.volume, .25);
+      expect(backend.starts, 0);
     },
   );
 
-  test('volume, accent and BPM bounds remain safe', () async {
-    controller.setBpm(999);
-    expect(controller.bpm, 240);
-    controller.setBpm(-2);
-    expect(controller.bpm, 40);
-    controller.setVolume(9);
-    controller.setVolume(double.nan);
-    controller.setAccent(false);
-    await controller.start();
-    await clock.advance(Duration.zero);
-    expect(output.clicks.single, (accent: false, volume: 1.0));
-    await controller.stop();
-    await controller.start();
-    await clock.advance(Duration.zero);
-    expect(clock.activeTimers, 1);
-    expect(controller.beat, 1);
+  test('invalid settings are rejected before the native channel', () {
+    expect(() => MetronomeSettings(beats: 0), throwsArgumentError);
+    expect(() => MetronomeSettings(beats: 13), throwsArgumentError);
+    expect(() => MetronomeSettings(activeBeats: [true]), throwsArgumentError);
+    expect(() => MetronomeSettings(volume: double.nan), throwsArgumentError);
+    expect(
+      () => MetronomeSettings(pattern: 'unknown', isTeacher: true),
+      throwsArgumentError,
+    );
   });
 
-  testWidgets(
-    'opening is silent; lifecycle background and closing stop the pulse',
-    (tester) async {
-      final output = FakeOutput();
-      final clock = ManualClock();
-      final controller = MetronomeController(
-        output: output,
-        now: () => clock.now,
-        timerFactory: clock.schedule,
-      );
-      addTearDown(controller.dispose);
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(body: MetronomePanel(controller: controller)),
-        ),
-      );
-      expect(output.preparations, 0);
-      await tester.tap(find.text('Включить метроном'));
-      await tester.pumpAndSettle();
-      expect(controller.isRunning, true);
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
-      await tester.pump();
-      expect(controller.isRunning, false);
-      expect(clock.activeTimers, 0);
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-      await tester.pump();
-      expect(controller.isRunning, false);
-      await tester.tap(find.text('Включить метроном'));
-      await tester.pumpAndSettle();
-      await tester.pumpWidget(const SizedBox());
-      expect(controller.isRunning, false);
-      expect(clock.activeTimers, 0);
-    },
-  );
+  testWidgets('shared controller survives closing its sheet and background', (
+    tester,
+  ) async {
+    final native = FakeBackend();
+    final shared = MetronomeController(backend: native);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: MetronomePanel(controller: shared)),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(native.starts, 0);
+    expect(find.byType(DropdownButtonFormField<String>), findsNothing);
+    await tester.tap(find.text('Включить метроном'));
+    await tester.pumpAndSettle();
+    expect(shared.isRunning, true);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await tester.pump();
+    expect(shared.isRunning, true);
+    await tester.pumpWidget(const SizedBox());
+    expect(shared.isRunning, true);
+    expect(native.stops, 0);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await shared.stop();
+    shared.dispose();
+    await native.bus.close();
+  });
 }

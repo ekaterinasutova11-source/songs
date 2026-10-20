@@ -70,7 +70,11 @@ const sameStyle = (a, b) => a.b === b.b && a.i === b.i && a.u === b.u && a.m ===
 
 // Разметка → HTML для показа (текст экранирован, теги только наши).
 export function renderLyrics(markup, { forEditor = false } = {}) {
-  return parseLyrics(markup).map(({ text, s }) => {
+  return renderRuns(parseLyrics(markup), forEditor);
+}
+
+function renderRuns(runs, forEditor = false) {
+  return runs.map(({ text, s }) => {
     let html = escHtml(text);
     if (forEditor) html = html.replace(/\n/g, '<br>');
     if (s.i) html = `<i>${html}</i>`;
@@ -83,6 +87,47 @@ export function renderLyrics(markup, { forEditor = false } = {}) {
       : COLORS[s.c] ? `<span class="c-${s.c}">${html}</span>` : `<span style="color:${s.c}">${html}</span>`;
     return html;
   }).join('');
+}
+
+// Split parsed runs, not markup: styles spanning a newline keep their state.
+export function renderedLyricLines(markup) {
+  const lines = [[]];
+  for (const run of parseLyrics(markup)) {
+    run.text.split('\n').forEach((text, index) => {
+      if (index) lines.push([]);
+      if (text) lines.at(-1).push({text: text.replace(/\r$/, ''), s: run.s});
+    });
+  }
+  return lines.map(line => renderRuns(line));
+}
+
+export function parseTimecode(value) {
+  const match = String(value).trim().match(/^(?:(\d{1,2}):)?(\d{1,3}):(\d{2})(?:[.,](\d{1,3}))?$/);
+  if (!match || Number(match[3]) >= 60 || (match[1] != null && Number(match[2]) >= 60)) return null;
+  const seconds = Number(match[1] || 0) * 3600 + Number(match[2]) * 60 + Number(match[3]) + Number(`0.${match[4] || 0}`);
+  return seconds <= 86400 ? seconds : null;
+}
+
+export function formatTimecode(seconds) {
+  const millis = Math.max(0, Math.round(seconds * 1000));
+  const minutes = Math.floor(millis / 60000);
+  const remainder = (millis % 60000 / 1000).toFixed(3).padStart(6, '0');
+  return `${minutes}:${remainder}`.replace(/\.000$/, '');
+}
+
+export function validateTimings(timings, song, text) {
+  const invalid = {valid: false, track: null, lines: [], reason: timings ? 'Текст или запись изменены. Настройте таймкоды заново.' : null};
+  if (!timings || timings.version !== 1 || !Array.isArray(timings.lines) || !song.lyrics) return invalid;
+  const track = song.variants.find(v => v.kind === 'minus' && v.file.name === timings.track &&
+    v.file.size === timings.trackSize && v.file.modified === timings.trackModified);
+  if (!track || timings.lyrics !== song.lyrics.name || timings.lyricsModified !== song.lyrics.modified) return invalid;
+  const rawLines = text.replace(/^\uFEFF/, '').split(/\r?\n/), seen = new Set();
+  for (const line of timings.lines) {
+    if (!Number.isInteger(line.line) || line.line < 0 || line.line >= rawLines.length || seen.has(line.line) ||
+        rawLines[line.line] !== line.text || !Number.isFinite(line.seconds) || line.seconds < 0 || line.seconds > 86400) return invalid;
+    seen.add(line.line);
+  }
+  return {valid: true, track, lines: timings.lines, reason: null};
 }
 
 // ---------- Редактор → разметка ----------

@@ -2,6 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_quill/flutter_quill.dart'
+    show FlutterQuillLocalizations;
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 
@@ -12,6 +16,8 @@ import 'lyrics.dart';
 import 'ui_settings.dart';
 import 'add_student.dart';
 import 'metronome.dart';
+import 'song_editor.dart';
+import 'timed_lyrics.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -59,10 +65,11 @@ class SecureSessionStore implements SessionStore {
 }
 
 class SongsApp extends StatefulWidget {
-  const SongsApp({super.key, this.api, this.store, this.uiStore});
+  const SongsApp({super.key, this.api, this.store, this.uiStore, this.player});
   final SongsApi? api;
   final SessionStore? store;
   final UiSettingsStore? uiStore;
+  final PlayerController? player;
   @override
   State<SongsApp> createState() => _SongsAppState();
 }
@@ -81,6 +88,13 @@ class _SongsAppState extends State<SongsApp> {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Сад звука',
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+        FlutterQuillLocalizations.delegate,
+      ],
+      supportedLocales: const [Locale('ru'), Locale('en')],
       debugShowCheckedModeBanner: false,
       theme: gardenTheme(Brightness.light),
       darkTheme: gardenTheme(Brightness.dark),
@@ -92,7 +106,11 @@ class _SongsAppState extends State<SongsApp> {
               ScaledInterface(scale: _settings.scale, child: child!),
         ),
       ),
-      home: LibraryHome(api: widget.api, store: widget.store),
+      home: LibraryHome(
+        api: widget.api,
+        store: widget.store,
+        player: widget.player,
+      ),
     );
   }
 
@@ -104,9 +122,10 @@ class _SongsAppState extends State<SongsApp> {
 }
 
 class LibraryHome extends StatefulWidget {
-  const LibraryHome({super.key, this.api, this.store});
+  const LibraryHome({super.key, this.api, this.store, this.player});
   final SongsApi? api;
   final SessionStore? store;
+  final PlayerController? player;
   @override
   State<LibraryHome> createState() => _LibraryHomeState();
 }
@@ -114,10 +133,13 @@ class LibraryHome extends StatefulWidget {
 class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
   late final SongsApi _api = widget.api ?? SongsApi();
   late final SessionStore _store = widget.store ?? SecureSessionStore();
-  late final PlayerController _player = PlayerController(
-    onAccessDenied: _mediaDenied,
-  );
+  late final PlayerController _player =
+      widget.player ??
+      PlayerController(onAccessDenied: () => _mediaDenied(fromPlayback: true));
   final _link = TextEditingController();
+  MetronomeController? _metronome;
+  bool _fileBusy = false;
+  String _readingFont = 'Современный';
   Session? _session;
   Library? _library;
   String? _studentId, _songId, _error, _lyrics;
@@ -136,6 +158,7 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     unawaited(_restore());
+    unawaited(_restoreFont());
     _timer = Timer.periodic(const Duration(seconds: 60), (_) {
       if (_session != null && !_refreshing && !_loading) {
         unawaited(_refresh(quiet: true));
@@ -163,7 +186,21 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _restoreFont() async {
+    try {
+      final value = await const FlutterSecureStorage().read(
+        key: 'songs.reading.font',
+      );
+      if (mounted && readingFonts.containsKey(value)) {
+        setState(() => _readingFont = value!);
+      }
+    } catch (_) {
+      /* OS storage is optional for reading. */
+    }
+  }
+
   void _setSession(Session session) {
+    _metronome ??= MetronomeController(isTeacher: session.isTeacher);
     _session = session;
     _studentId = session.folder;
     _songId = session.song;
@@ -241,8 +278,8 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
     try {
       final library = await _api.library(session);
       if (!mounted || epoch != _epoch) return;
-      final previousSong = _songId;
       final previousSpace = _studentId;
+      final previousLyricsModified = _song?.lyricsFile?.modified;
       var spaceRemoved = false;
       setState(() {
         _library = library;
@@ -262,12 +299,26 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
           _lyrics = null;
           _lyricsLoading = false;
         }
+        if (_song?.lyricsFile?.modified != previousLyricsModified) {
+          _textEpoch++;
+          _lyrics = null;
+          _lyricsLoading = false;
+        }
         if (_songId != null &&
             !(_student?.songs.any((s) => s.key == _songId) ?? false)) {
           _songId = null;
         }
       });
-      if (spaceRemoved || (previousSong != null && _songId == null)) {
+      final playingSpace = library.students
+          .where((s) => s.id == _player.playingFolderId)
+          .firstOrNull;
+      if (_player.hasTrack &&
+          (playingSpace == null ||
+              !playingSpace.songs.any(
+                (song) => song.variants.any(
+                  (v) => v.file.name == _player.playingFileName,
+                ),
+              ))) {
         await _player.stop();
       }
       if (!mounted || epoch != _epoch) return;
@@ -293,6 +344,7 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
     _epoch++;
     _refreshing = false;
     unawaited(_player.stop());
+    unawaited(_metronome?.stop());
     _textEpoch++;
     setState(() {
       _library = null;
@@ -306,10 +358,11 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
 
   // A removed membership must not sign the pupil out of personal materials.
   // Rechecking the library still blocks an archived/invalid personal key.
-  void _mediaDenied() {
+  void _mediaDenied({bool fromPlayback = false}) {
     if (!mounted) return;
-    if (_session?.isTeacher != false ||
-        _studentId == _library?.personalSpaceId) {
+    if (!fromPlayback &&
+        (_session?.isTeacher != false ||
+            _studentId == _library?.personalSpaceId)) {
       _deny();
       return;
     }
@@ -318,7 +371,9 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
     _refreshing = false;
     unawaited(_player.stop());
     setState(() {
-      _studentId = _library?.personalSpaceId;
+      _studentId = _session?.isTeacher == true
+          ? null
+          : _library?.personalSpaceId;
       _songId = null;
       _lyrics = null;
       _lyricsLoading = false;
@@ -333,7 +388,6 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
       return;
     }
     _textEpoch++;
-    unawaited(_player.stop());
     setState(() {
       _studentId = id;
       _songId = null;
@@ -369,6 +423,9 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
       _query = '';
     });
     unawaited(_player.stop());
+    unawaited(_metronome?.stop());
+    _metronome?.dispose();
+    _metronome = null;
     String? error;
     try {
       await _changeStore(_store.clear);
@@ -482,12 +539,324 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
         constraints: BoxConstraints(
           maxHeight: MediaQuery.sizeOf(context).height * .8,
         ),
-        child: const SingleChildScrollView(
+        child: SingleChildScrollView(
           padding: EdgeInsets.fromLTRB(8, 0, 8, 20),
-          child: MetronomePanel(),
+          child: MetronomePanel(
+            controller: _metronome,
+            isTeacher: _session?.isTeacher == true,
+          ),
         ),
       ),
     );
+  }
+
+  Future<void> _editSong() async {
+    final song = _song, space = _student, session = _session;
+    if (song == null || space == null || session == null || _blocked) return;
+    final epoch = _epoch;
+    try {
+      final original = song.lyricsFile == null
+          ? ''
+          : await _api.lyrics(session, space.id, song.lyricsFile!);
+      if (!mounted || epoch != _epoch) return;
+      await Navigator.push<bool>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => SongEditorPage(
+            song: song,
+            text: original,
+            teacher: session.isTeacher,
+            save: (result) async {
+              if (epoch != _epoch) {
+                throw const ApiFailure(
+                  403,
+                  'Вход изменился. Откройте песню заново.',
+                );
+              }
+              final changedText =
+                  result.text != original ||
+                  song.lyricsFile == null && result.text.isNotEmpty;
+              final patch = <String, dynamic>{
+                if (result.notes != (song.meta['notes'] ?? ''))
+                  'notes': result.notes,
+                if (result.translation != (song.meta['translation'] ?? ''))
+                  'translation': result.translation,
+              };
+              await _api.editSong(session, space.id, song.key, {
+                if (changedText)
+                  'lyrics': {
+                    'name': song.lyricsFile?.name ?? '${song.title}.txt',
+                    'text': result.text,
+                    'expectedModified': song.lyricsFile?.modified,
+                  },
+                if (session.isTeacher && result.title != song.title)
+                  'name': result.title,
+                if (session.isTeacher && patch.isNotEmpty) 'patch': patch,
+                if (session.isTeacher && patch.isNotEmpty)
+                  'expectedPatch': {
+                    for (final key in patch.keys) key: song.meta[key] ?? '',
+                  },
+              });
+              if (mounted && epoch == _epoch) {
+                setState(() {
+                  _songId = songKey(result.title);
+                  _lyrics = null;
+                });
+              }
+            },
+          ),
+        ),
+      );
+      if (mounted && epoch == _epoch) await _refresh(quiet: true);
+    } on ApiFailure catch (e) {
+      if (mounted) _message(e.message);
+    } catch (_) {
+      if (mounted) _message('Не удалось открыть редактор. Проверьте интернет.');
+    }
+  }
+
+  Future<void> _editTimings() async {
+    final song = _song, space = _student, session = _session, text = _lyrics;
+    if (song == null || space == null || session == null || text == null) {
+      return;
+    }
+    final epoch = _epoch;
+    await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => TimingEditorPage(
+          song: song,
+          text: text,
+          currentPosition: (track) =>
+              _player.playingFolderId == space.id &&
+                  _player.playingFileName == track
+              ? _player.position
+              : null,
+          save: (timings) async {
+            if (epoch != _epoch) throw const ApiFailure(403, 'Вход изменился.');
+            await _api.saveTimings(session, space.id, song.key, timings);
+          },
+        ),
+      ),
+    );
+    if (mounted && epoch == _epoch) await _refresh(quiet: true);
+  }
+
+  Future<void> _playTimedLine(AudioVariant variant, double seconds) async {
+    final song = _song, space = _student, session = _session;
+    if (song == null || space == null || session == null) return;
+    final target = Duration(milliseconds: (seconds * 1000).round());
+    if (_player.playingFolderId == space.id &&
+        _player.playingFileName == variant.file.name) {
+      if (_player.duration > Duration.zero && target >= _player.duration) {
+        _message('Таймкод выходит за длительность записи.');
+        return;
+      }
+      await _player.seekAndPlay(target);
+    } else {
+      await _player.playVariant(
+        _api,
+        session,
+        space.id,
+        song,
+        variant,
+        startAt: target,
+      );
+    }
+  }
+
+  Future<void> _download(AudioVariant variant) async {
+    final session = _session, space = _student;
+    if (_fileBusy || session == null || space == null) return;
+    final epoch = _epoch;
+    setState(() => _fileBusy = true);
+    try {
+      final bytes = await _api.download(session, space.id, variant.file);
+      if (!mounted || epoch != _epoch) return;
+      final saved = await FilePicker.saveFile(
+        fileName: variant.file.name,
+        bytes: bytes,
+        dialogTitle: 'Сохранить аудиозапись',
+      );
+      if (saved != null && mounted) _message('Запись сохранена на устройстве');
+    } on ApiFailure catch (e) {
+      if (mounted) _message(e.message);
+    } catch (_) {
+      if (mounted) {
+        _message(
+          'Не удалось скачать запись. Проверьте интернет и свободное место.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _fileBusy = false);
+    }
+  }
+
+  Future<void> _uploadAudio({AudioVariant? replace}) async {
+    final session = _session, space = _student, song = _song;
+    if (_fileBusy || session?.isTeacher != true || space == null) return;
+    final epoch = _epoch;
+    setState(() => _fileBusy = true);
+    try {
+      final picked = await FilePicker.pickFile(
+        type: FileType.custom,
+        allowedExtensions: const [
+          'mp3',
+          'wav',
+          'm4a',
+          'aac',
+          'ogg',
+          'flac',
+          'opus',
+          'webm',
+        ],
+      );
+      if (picked == null || !mounted || epoch != _epoch) return;
+      final ext = picked.name.split('.').last.toLowerCase();
+      String? name;
+      if (replace != null) {
+        if (!replace.file.name.toLowerCase().endsWith('.$ext')) {
+          _message(
+            'Для замены выберите файл того же формата. Другой формат можно добавить отдельной дорожкой.',
+          );
+          return;
+        }
+        final ok = await showDialog<bool>(
+          context: context,
+          builder: (c) => AlertDialog(
+            title: const Text('Заменить аудиозапись?'),
+            content: Text(replace.file.name),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(c, false),
+                child: const Text('Отмена'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(c, true),
+                child: const Text('Заменить'),
+              ),
+            ],
+          ),
+        );
+        if (ok != true) return;
+        name = replace.file.name;
+      } else {
+        final title = await _nameDialog(
+          'Название новой дорожки',
+          song == null ? '' : song.title,
+        );
+        if (title == null || !mounted) return;
+        final kind = await showDialog<String>(
+          context: context,
+          builder: (c) => SimpleDialog(
+            title: const Text('Тип записи'),
+            children: [
+              for (final item in {
+                'minus': 'Минус',
+                'plus': 'Плюс',
+                'orig': 'Оригинал',
+              }.entries)
+                SimpleDialogOption(
+                  onPressed: () => Navigator.pop(c, item.key),
+                  child: Text(item.value),
+                ),
+            ],
+          ),
+        );
+        if (kind == null) return;
+        final label = await _nameDialog(
+          'Пометка варианта (можно пустую)',
+          '',
+          allowEmpty: true,
+        );
+        if (label == null) return;
+        name = buildFileName(title, kind, label, '.$ext');
+      }
+      if (!mounted || epoch != _epoch) return;
+      setState(() => _fileBusy = true);
+      final size = await picked.length();
+      if (size != null && size > 268435456) {
+        throw const ApiFailure(413, 'Допустим файл до 256 МБ.');
+      }
+      final bytes = await picked.readAsBytes();
+      if (!mounted || epoch != _epoch) return;
+      await _api.upload(
+        session!,
+        space.id,
+        name,
+        bytes,
+        overwrite: replace != null,
+        canContinue: () => mounted && epoch == _epoch,
+      );
+      if (mounted && epoch == _epoch) {
+        _message('Аудиозапись сохранена');
+        await _refresh(quiet: true);
+      }
+    } on ApiFailure catch (e) {
+      if (mounted) _message(e.message);
+    } catch (_) {
+      if (mounted) {
+        _message(
+          'Не удалось загрузить запись. Проверьте список дорожек перед повтором.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _fileBusy = false);
+    }
+  }
+
+  Future<String?> _nameDialog(
+    String title,
+    String initial, {
+    bool allowEmpty = false,
+  }) async {
+    String value = initial;
+    return showDialog<String>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: Text(title),
+        content: TextFormField(
+          initialValue: initial,
+          autofocus: true,
+          maxLength: 150,
+          onChanged: (text) => value = text,
+          decoration: const InputDecoration(labelText: 'Название'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(c),
+            child: const Text('Отмена'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (allowEmpty || value.trim().isNotEmpty) {
+                Navigator.pop(c, value.trim());
+              }
+            },
+            child: const Text('Готово'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _renameSpace() async {
+    final session = _session, space = _student;
+    if (session?.isTeacher != true || space == null) return;
+    final name = await _nameDialog(
+      'Имя ученика или название пространства',
+      space.name,
+    );
+    if (name == null || name == space.name) return;
+    try {
+      await _api.teacherAction(session!, 'renameStudent', {
+        'folder': space.id,
+        'newName': name,
+      });
+      if (mounted) await _refresh(quiet: true);
+    } on ApiFailure catch (e) {
+      if (mounted) _message(e.message);
+    }
   }
 
   @override
@@ -564,14 +933,14 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
               ? _statusView()
               : Column(
                   children: [
+                    if (_fileBusy) const LinearProgressIndicator(),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 20),
                       child: Align(
                         alignment: Alignment.centerLeft,
-                        child: TextButton.icon(
+                        child: MetronomeButton(
+                          controller: _metronome!,
                           onPressed: _showMetronome,
-                          icon: const Icon(Icons.timer_outlined),
-                          label: const Text('Метроном'),
                         ),
                       ),
                     ),
@@ -730,6 +1099,22 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
           ),
           if (student?.isArchived == true)
             const Text('В архиве · ученику доступ закрыт'),
+          if (student != null && _session?.isTeacher == true)
+            Wrap(
+              spacing: 8,
+              children: [
+                TextButton.icon(
+                  onPressed: _renameSpace,
+                  icon: const Icon(Icons.edit_outlined),
+                  label: const Text('Изменить имя'),
+                ),
+                TextButton.icon(
+                  onPressed: _fileBusy ? null : () => _uploadAudio(),
+                  icon: const Icon(Icons.upload_file),
+                  label: const Text('Добавить песню'),
+                ),
+              ],
+            ),
           const SizedBox(height: 20),
           if (student == null && _session?.isTeacher == true)
             Padding(
@@ -849,6 +1234,27 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
       _eyebrow(_student?.name ?? ''),
       const SizedBox(height: 8),
       Text(song.title, style: Theme.of(context).textTheme.headlineLarge),
+      Wrap(
+        spacing: 8,
+        children: [
+          TextButton.icon(
+            onPressed: _lyricsLoading ? null : _editSong,
+            icon: const Icon(Icons.edit_outlined),
+            label: const Text('Изменить'),
+          ),
+          TextButton.icon(
+            onPressed: _lyrics == null ? null : _editTimings,
+            icon: const Icon(Icons.schedule),
+            label: const Text('Таймкоды'),
+          ),
+          if (_session?.isTeacher == true)
+            TextButton.icon(
+              onPressed: _fileBusy ? null : () => _uploadAudio(),
+              icon: const Icon(Icons.upload_file),
+              label: const Text('Добавить дорожку'),
+            ),
+        ],
+      ),
       const SizedBox(height: 20),
       for (final variant in song.variants) _variantTile(song, variant),
       if (song.variants.isEmpty)
@@ -858,7 +1264,41 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
           padding: EdgeInsets.all(20),
           child: Center(child: CircularProgressIndicator()),
         ),
-      if (_lyrics != null) _textCard('Текст песни', _lyrics!, formatted: true),
+      if (_lyrics != null) ...[
+        DropdownButtonFormField<String>(
+          initialValue: _readingFont,
+          isExpanded: true,
+          decoration: const InputDecoration(labelText: 'Шрифт текста'),
+          items: [
+            for (final name in readingFonts.keys)
+              DropdownMenuItem(
+                value: name,
+                child: Text(name, style: readingFonts[name]),
+              ),
+          ],
+          onChanged: (value) {
+            if (value != null) {
+              setState(() => _readingFont = value);
+              unawaited(
+                const FlutterSecureStorage()
+                    .write(key: 'songs.reading.font', value: value)
+                    .catchError((_) {}),
+              );
+            }
+          },
+        ),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: TimedLyrics(
+              text: _lyrics!,
+              song: song,
+              style: readingFonts[_readingFont],
+              onSeek: _playTimedLine,
+            ),
+          ),
+        ),
+      ],
       for (final entry in {
         'translation': 'Перевод',
         'notes': 'Заметки',
@@ -947,6 +1387,29 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
             variant.displayName,
             style: TextStyle(color: palette.ink, fontWeight: FontWeight.w600),
           ),
+          trailing: _session?.isTeacher != true
+              ? IconButton(
+                  tooltip: 'Скачать запись',
+                  onPressed: _fileBusy ? null : () => _download(variant),
+                  icon: const Icon(Icons.download_outlined),
+                )
+              : PopupMenuButton<String>(
+                  tooltip: 'Действия с дорожкой',
+                  onSelected: (value) {
+                    if (value == 'download') _download(variant);
+                    if (value == 'replace') _uploadAudio(replace: variant);
+                  },
+                  itemBuilder: (_) => [
+                    const PopupMenuItem(
+                      value: 'download',
+                      child: Text('Скачать запись'),
+                    ),
+                    const PopupMenuItem(
+                      value: 'replace',
+                      child: Text('Заменить аудиофайл'),
+                    ),
+                  ],
+                ),
           onTap: () =>
               _player.playVariant(_api, _session!, _student!.id, song, variant),
         ),
@@ -981,6 +1444,7 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
     _textEpoch++;
     _link.dispose();
     _player.dispose();
+    _metronome?.dispose();
     if (widget.api == null) _api.close();
     super.dispose();
   }

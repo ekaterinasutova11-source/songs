@@ -1,5 +1,17 @@
 # Перенос Songs в Selectel
 
+## Редактирование и таймкоды 0.4.0
+
+Код API теперь включает migration/song-editing.mjs и корневой parse.js:
+публиковать /opt/songs/migration/server.mjs, /opt/songs/migration/song-editing.mjs
+и /opt/songs/parse.js совместно. saveLyrics/editSong/saveTimings проверяют активное
+прямое участие в группе или собственный кабинет. Новое требование разрешает
+ученикам TXT/таймкоды общих песен, остальные групповые мутации закрыты.
+editSong атомарен, TXT expectedModified и notes/translation expectedPatch
+защищают черновики от потери параллельных правок. renameSong — только учитель.
+Таймкоды хранятся в meta.songs[key].timings и включаются в обычный SQLite/blobs
+backup; дополнительной базы/платного сервиса нет. Релиз статики 2026-10-20-040.
+
 ## Общие пространства, 20 октября 2026
 
 Аддитивная миграция SQLite добавляет folders.kind и space_memberships. Состав

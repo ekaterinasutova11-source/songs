@@ -20,6 +20,7 @@ export class Metronome {
     this.timer = null;
     this.lastScheduled = -Infinity;
     this.onBeat = null;
+    this.beatMask = [true];
     this.pending = new Set();
     this.visualTimers = new Set();
     this.source = null;
@@ -35,6 +36,19 @@ export class Metronome {
     this.visualTimers.clear();
     this.lastScheduled = -Infinity;
     this.previousAudioTime = null;
+  }
+
+  setBeatMask(mask) {
+    if (!Array.isArray(mask) || mask.length < 1 || mask.length > 12 || mask.some(value => typeof value !== 'boolean')) throw new RangeError('От 1 до 12 долей');
+    this.beatMask = [...mask];
+    this.reset(); // Cancel scheduled sound; preserve BPM, beats and grid phase.
+    const now = this.audio?.currentTime ?? this.ctx?.currentTime;
+    if (Number.isFinite(now)) this.lastScheduled = now;
+  }
+
+  beatState(index) {
+    const slot = ((index % this.beatMask.length) + this.beatMask.length) % this.beatMask.length;
+    return {slot, audible: this.beatMask[slot]};
   }
 
   setGrid(bpm, offset) {
@@ -178,10 +192,12 @@ export class Metronome {
     for (const t of this.beatsBetween(Math.max(now - 0.01, this.lastScheduled + 1e-3), now + 0.12 * rate)) {
       if (t > a.duration) break;
       const when = Math.max(this.ctx.currentTime, this.ctx.currentTime + (t - now) / rate);
-      this.click(when);
+      const index = this.beats ? this.nearestIndex(t) : Math.round((t - this.offset) * this.bpm / 60);
+      const beat = this.beatState(index);
+      if (beat.audible) this.click(when);
       this.lastScheduled = t;
       if (this.onBeat) {
-        const timer = setTimeout(() => { this.visualTimers.delete(timer); this.onBeat?.(); }, Math.max(0, (when - this.ctx.currentTime) * 1000));
+        const timer = setTimeout(() => { this.visualTimers.delete(timer); this.onBeat?.(beat.slot, beat.audible); }, Math.max(0, (when - this.ctx.currentTime) * 1000));
         this.visualTimers.add(timer);
       }
     }
@@ -297,8 +313,9 @@ export class StandaloneMetronome extends Metronome {
     for (let k = first; ; k++) {
       const t = this.offset + k * step;
       if (t > now + 0.12) break;
-      if (this.pattern === 'click') this.click(t);
-      else {
+      const beat = this.beatState(Math.floor(k / subdivisions));
+      if (this.pattern === 'click' && beat.audible) this.click(t);
+      else if (this.pattern !== 'click' && beat.audible) {
         const position = k % pattern.steps;
         for (const voice of Object.keys(DRUM_VOICES)) {
           if (pattern[voice]?.includes(position)) this.drum(voice, t, (position % subdivisions ? 0.65 : 1) * (pattern.levels?.[voice] ?? 1));
@@ -306,7 +323,7 @@ export class StandaloneMetronome extends Metronome {
       }
       this.lastScheduled = t;
       if (this.onBeat && k % subdivisions === 0) {
-        const timer = setTimeout(() => { this.visualTimers.delete(timer); this.onBeat?.(); }, Math.max(0, (t - now) * 1000));
+        const timer = setTimeout(() => { this.visualTimers.delete(timer); this.onBeat?.(beat.slot, beat.audible); }, Math.max(0, (t - now) * 1000));
         this.visualTimers.add(timer);
       }
     }

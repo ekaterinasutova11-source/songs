@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import {normalizeColor, parseLyrics, renderLyrics, editorToMarkup} from '../lyrics.js';
+import {normalizeColor, parseLyrics, renderLyrics, editorToMarkup, renderedLyricLines, validateTimings, parseTimecode, formatTimecode} from '../lyrics.js';
 
 test('all historical website TXT fixtures preserve their rendering', () => {
   const fixtures = JSON.parse(fs.readFileSync(new URL('../mobile/test/fixtures/lyrics_web.json', import.meta.url)));
@@ -63,4 +63,26 @@ test('removing only marker leaves letter color and bold intact', () => {
     const root = el('DIV', [el('FONT', [el('B', [el('SPAN', [text('цвет')], {backgroundColor:'transparent'})])], {}, {color:'#123456'})]);
     assert.equal(editorToMarkup(root), '[color=#123456]**цвет**[/color]');
   } finally { globalThis.Node = previous; }
+});
+
+test('timecodes validate against exact lyric lines and the selected minus revision', () => {
+  const song = {lyrics:{name:'Song.txt',modified:'text-v1'}, variants:[{kind:'minus',file:{name:'Song -.mp3',size:123,modified:'audio-v1'}}]};
+  const value = {version:1, track:'Song -.mp3',trackSize:123,trackModified:'audio-v1',lyrics:'Song.txt',lyricsModified:'text-v1',lines:[{line:1,seconds:153.125,text:'**Вторая**'}]};
+  const text = '\uFEFFПервая\r\n**Вторая**';
+  assert.equal(validateTimings(value,song,text).valid,true);
+  assert.equal(validateTimings({...value,trackModified:'audio-v0'},song,text).valid,false);
+  assert.equal(validateTimings({...value,lyricsModified:'text-v0'},song,text).valid,false);
+  assert.equal(validateTimings(value,song,'Первая\nВторая').valid,false);
+  assert.equal(validateTimings({...value,lines:[...value.lines,...value.lines]},song,text).valid,false);
+  assert.equal(validateTimings({...value,lines:[{line:1,text:'**Вторая**',seconds:Infinity}]},song,text).valid,false);
+  assert.equal(validateTimings(null,song,text).reason,null);
+});
+
+test('lyric line rendering preserves styles spanning lines without adding markup tokens', () => {
+  assert.deepEqual(renderedLyricLines('**Первый\nвторой**\n'), ['<b>Первый</b>','<b>второй</b>','']);
+  assert.equal(parseTimecode('2:33.125'),153.125);
+  assert.equal(parseTimecode('1:02:03'),3723);
+  for (const input of ['2:99','x','-1:00','999:00:00']) assert.equal(parseTimecode(input),null);
+  assert.equal(formatTimecode(153.125),'2:33.125');
+  assert.equal(formatTimecode(60),'1:00');
 });

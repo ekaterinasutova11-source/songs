@@ -24,6 +24,55 @@ async function fixture(readOnly=false) {
   return {...app,directory,base,request,signed,close};
 }
 
+test('shared lyrics and bound timecodes allow members, reject peers, conflicts and changed tracks', async () => {
+  const app = await fixture();
+  try {
+    app.store.db.prepare('INSERT INTO folders(id,name,key) VALUES(?,?,?)').run('g','group','group-key');
+    app.store.transaction(() => {
+      app.store.saveFile('g','song -.mp3',app.store.putBytes(Buffer.from('audio')));
+      app.store.saveFile('g','song.txt',app.store.putBytes(Buffer.from('Первая строка\r\nВторая строка')));
+    });
+    await app.request('setSpaceMembers',{folder:'g',kind:'duet',members:['a']});
+    let data = app.store.folderData('g');
+    const old = data.files.find(f => f.name === 'song.txt').modified;
+    assert.equal((await app.request('saveLyrics',{folder:'g',name:'song.txt',text:'Правка',expectedModified:old},'pupil-b')).status,403);
+    assert.equal((await app.request('saveLyrics',{folder:'g',name:'song.txt',text:'Первая строка\nНовая строка',expectedModified:old},'pupil-a')).status,200);
+    assert.equal((await app.request('saveLyrics',{folder:'g',name:'song.txt',text:'Потерянная правка',expectedModified:'stale'},'pupil-a')).status,409);
+    assert.equal((await app.request('saveLyrics',{folder:'g',name:'anything.json',text:'bad'},'pupil-a')).status,400);
+    assert.equal((await app.request('saveMeta',{folder:'g',song:'song',patch:{notes:'not allowed'}},'pupil-a')).status,403);
+    data = app.store.folderData('g');
+    const track = data.files.find(f => f.name.endsWith('.mp3')), lyrics = data.files.find(f => f.name === 'song.txt');
+    const timings={version:1,track:track.name,trackSize:track.size,trackModified:track.modified,lyrics:lyrics.name,lyricsModified:lyrics.modified,lines:[{line:1,seconds:2.5,text:'Новая строка'}]};
+    assert.equal((await app.request('saveTimings',{folder:'g',song:'song',timings},'pupil-a')).status,200);
+    assert.deepEqual(app.store.folderData('g').meta.song.timings,timings);
+    assert.equal((await app.request('saveTimings',{folder:'g',song:'song',timings:{...timings,lines:[{line:1,seconds:-1,text:'Новая строка'}]}},'pupil-a')).status,400);
+    assert.equal((await app.request('saveTimings',{folder:'g',song:'song',timings:{...timings,trackModified:'stale'}},'pupil-a')).status,409);
+    await app.request('archiveStudent',{folder:'a'});
+    assert.equal((await app.request('saveLyrics',{folder:'g',name:'song.txt',text:'bad'},'pupil-a')).status,403);
+    assert.equal(app.store.folderData('g').meta.song.timings.lines[0].seconds,2.5);
+  } finally { await app.close(); }
+});
+
+test('atomic song edits roll back on invalid rename and preserve pupil keys and audio bytes',async()=>{
+  const app=await fixture();
+  try {
+    app.store.transaction(()=>app.store.saveFile('a','song.txt',app.store.putBytes(Buffer.from('Original **text**'))));
+    const before=app.store.folderData('a'),file=before.files.find(f=>f.name==='song.txt');
+    assert.equal((await app.request('editSong',{folder:'a',song:'song',lyrics:{name:'song.txt',text:'Lost',expectedModified:file.modified},name:'prototype',patch:{notes:'Lost'}})).status,400);
+    assert.equal(fs.readFileSync(app.store.blobPath(app.store.file('a','song.txt').blob),'utf8'),'Original **text**');
+    assert.deepEqual(app.store.folderData('a'),before);
+    assert.equal((await app.request('editSong',{folder:'a',song:'song',name:'Forbidden'},'pupil-a')).status,403);
+    assert.equal((await app.request('editSong',{folder:'a',song:'song',lyrics:{name:'song.txt',text:'New **text**',expectedModified:file.modified},name:'New title',patch:{notes:'Saved'}})).status,200);
+    const after=app.store.folderData('a');
+    assert.equal(app.store.folder('a').key,'pupil-a');
+    assert.equal(fs.readFileSync(app.store.blobPath(app.store.file('a','New title.mp3').blob),'utf8'),'0123456789');
+    assert.equal(fs.readFileSync(app.store.blobPath(app.store.file('a','New title.txt').blob),'utf8'),'New **text**');
+    assert.equal(after.meta['new title'].notes,'Saved');
+    assert.equal((await app.request('editSong',{folder:'a',song:'new title',patch:{notes:'Lost'},expectedPatch:{notes:'stale'}})).status,409);
+    assert.equal(app.store.folderData('a').meta['new title'].notes,'Saved');
+  }finally{await app.close();}
+});
+
 test('direct shared memberships expose only own and assigned groups; legacy links stay scoped',async()=>{
   const app=await fixture();
   try {

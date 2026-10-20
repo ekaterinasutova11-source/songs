@@ -243,3 +243,54 @@ body.has-player .editor-footer, body.has-player:has(.player.with-metro) .editor-
 /* A quiet, visible explanation while working from an older reserve snapshot. */
 .reserve-notice { padding: 12px 20px; background: #eee6f5; color: #554761; font-size: 14px; line-height: 1.5; text-align: center; }
 .reserve-notice[hidden] { display: none; }
+/* Practice controls: metronome stays above the waveform at every width. */
+.player { grid-template-areas: "info controls extra" "metro metro metro" "wave wave wave" "time time time"; }
+.p-metro { min-width: 0; align-items: center; flex-wrap: wrap; }
+.p-metro .m-tools { min-width: 0; flex-wrap: wrap; }
+.beat-mask { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; font-size: 12px; }
+.beat-mask label { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.beat-count { padding: 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.beat-buttons { display: flex; flex-wrap: wrap; gap: 4px; }
+.beat-toggle { width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 7px; cursor: pointer; color: var(--muted); background: var(--surface); }
+.beat-toggle[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.beat-toggle[aria-pressed="false"] { opacity: .65; text-decoration: line-through; }
+.beat-toggle.beat-current { outline: 2px solid var(--accent); outline-offset: 2px; }
+.p-metro .beat-mask { padding: 4px 0; flex-basis: 100%; }
+.metro-background-note { max-width: 992px; margin: 0 auto; padding: 0 12px 8px; font-size: 10px; }
+.standalone-widget > .beat-mask { max-width: 1016px; margin: auto; }
+.p-speed-control { display: grid; gap: 2px; justify-items: center; font-size: 10px; }
+.p-speed { width: 86px; max-width: 86px; padding: 0; height: 20px; cursor: pointer; accent-color: var(--accent); }
+.p-speed-reset { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 4px 6px; font-size: 11px; cursor: pointer; }
+.variant-slot { display: flex; flex: 1 1 150px; min-width: 0; flex-direction: column; gap: 5px; }
+.variant-slot .chip { flex: 1 1 auto; width: 100%; }
+.variant-download { align-self: flex-start; font-size: 10px; padding: 4px 8px; }
+.lyrics-editor { overflow: visible; }
+.format-color-popup { position: relative; }
+.format-color-popup > summary { display: flex; align-items: center; gap: 5px; list-style: none; font-size: 12px; }
+.format-color-popup > summary::-webkit-details-marker { display: none; }
+.format-color-popup .format-color-group { position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; width: min(300px, 75vw); background: var(--surface); box-shadow: 0 8px 28px rgb(0 0 0 / .15); }
+.format-color-popup[open] > summary { background: var(--accent-soft); color: var(--accent); }
+.toolbar-fmt { overflow: visible; z-index: 5; }
+:root[data-lyrics-font="garden"] .lyrics-text { font-family: 'Cormorant Garamond', Georgia, serif; font-size: 24px; }
+:root[data-lyrics-font="times"] .lyrics-text { font-family: 'Times New Roman', Times, serif; font-size: 19px; }
+:root[data-lyrics-font="mono"] .lyrics-text { font-family: ui-monospace, Consolas, monospace; font-size: 15px; }
+:root[data-lyrics-font="rounded"] .lyrics-text { font-family: ui-rounded, 'Trebuchet MS', system-ui, sans-serif; font-size: 17px; }
+.lyric-line { display: block; min-height: 1.9em; white-space: pre-wrap; }
+.lyric-timed { border: 0; width: 100%; background: transparent; padding: 0 4px; text-align: left; cursor: pointer; color: inherit; font: inherit; line-height: inherit; border-radius: 5px; }
+.lyric-timed:hover, .lyric-timed:focus-visible { background: var(--surface); outline: 1px solid var(--accent); }
+.timing-warning { margin-top: 10px; color: var(--accent); font-size: 12px; }
+.timing-dialog { width: min(720px, calc(100% - 24px)); }
+.timing-fields { display: grid; gap: 8px; margin: 16px 0; }
+.timing-row { display: grid; grid-template-columns: minmax(0, 1fr) 94px auto; gap: 8px; align-items: center; }
+.timing-preview { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; font-size: 13px; }
+.timing-input { padding: 6px !important; font-size: 13px; width: 94px; }
+@media(max-width:700px) {
+  .player { grid-template-areas: "info extra" "controls controls" "metro metro" "wave wave" "time time"; }
+  .p-metro .m-tools { flex-basis: 100%; gap: 5px; }
+  .p-extra { max-width: 220px; }
+  .format-color-popup .format-color-group { position: fixed; top: auto; left: 12px; right: 12px; width: auto; max-width: 340px; margin-top: 4px; }
+  .format-color-value { font-size: 16px; }
+  .timing-row { grid-template-columns: minmax(0,1fr) 84px; }
+  .timing-row .btn { grid-column: 2; }
+  .timing-input { width: 84px; }
+}

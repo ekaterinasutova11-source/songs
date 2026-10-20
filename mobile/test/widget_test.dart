@@ -135,6 +135,7 @@ void main() {
     expect(find.text('Минус'), findsOneWidget);
     expect(find.text('Плюс'), findsOneWidget);
     expect(find.text('Because I am happy'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('Счастье'),100,scrollable:find.byType(Scrollable).first);
     expect(find.text('Счастье'), findsOneWidget);
     await tester.scrollUntilVisible(
       find.text('Мягкое начало'),
