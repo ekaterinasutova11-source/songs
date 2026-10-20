@@ -9,7 +9,7 @@ if(pages.source?.branch==='codex/pages-redirect'){
   const bridge=await response.text();
   const primary=await(await fetch('https://135.106.183.211/',{cache:'no-store',signal:AbortSignal.timeout(30000)})).text();
   const report={checkedAt:new Date().toISOString(),build:{status:build.status,commit:build.commit},hosting:'Selectel',legacySource:pages.source,
-    checks:{bridge:response.status===200&&bridge.includes("new URL('https://135.106.183.211/')")&&bridge.includes('destination.hash = location.hash'),primary:primary.includes('app.js?v=archive2'),selfHostedFonts:primary.includes('assets/fonts/fonts.css')},ready:false};
+    checks:{bridge:response.status===200&&bridge.includes("new URL('https://135.106.183.211/')")&&bridge.includes('destination.hash = location.hash'),primary:primary.includes(fs.readFileSync('index.html','utf8').match(/src="(app\.js\?v=[^"]+)"/)[1]),selfHostedFonts:primary.includes('assets/fonts/fonts.css')},ready:false};
   report.ready=build.status==='built'&&Object.values(report.checks).every(Boolean);
   fs.writeFileSync('outputs/selectel-publication.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report));
   if(!report.ready)process.exitCode=2;

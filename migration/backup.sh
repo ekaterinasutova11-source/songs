@@ -5,6 +5,8 @@ exec 9>/run/lock/songs-backup.lock
 flock -n 9 || exit 0
 export RESTIC_REPOSITORY=/var/backups/songs-restic
 export RESTIC_PASSWORD_FILE=/etc/songs/backup-password
+export RESTIC_CACHE_DIR=/var/cache/songs-restic
+install -d -m 700 "$RESTIC_CACHE_DIR"
 install -d -m 700 /var/backups/songs-snapshot
 sqlite3 /var/lib/songs/songs.sqlite '.backup /var/backups/songs-snapshot/songs.sqlite'
 test "$(sqlite3 /var/backups/songs-snapshot/songs.sqlite 'PRAGMA integrity_check;')" = ok
