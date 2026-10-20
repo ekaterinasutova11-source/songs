@@ -328,6 +328,8 @@ ApiFailure _httpFailure(int status) => ApiFailure(status, switch (status) {
   401 || 403 =>
     'Доступ закрыт или ссылка недействительна. Обратитесь к преподавателю.',
   404 => 'Материал больше не найден. Обновите список песен.',
+  400 => 'Проверьте имя: оно не должно содержать служебные символы.',
+  409 => 'Такое имя уже существует. Проверьте список учеников.',
   _ => 'Сервер временно недоступен. Попробуйте ещё раз.',
 });
 
@@ -406,6 +408,25 @@ class SongsApi {
         'Не удалось прочитать библиотеку. Обновите страницу.',
       );
     }
+  }
+
+  Future<void> createStudent(Session session, String name) async {
+    if (!session.isTeacher) {
+      throw const ApiFailure(
+        403,
+        'Добавлять учеников может только преподаватель.',
+      );
+    }
+    final trimmed = name.trim();
+    if (trimmed.isEmpty ||
+        trimmed.length > 200 ||
+        RegExp(r'[\\/\x00-\x1f]').hasMatch(trimmed)) {
+      throw const ApiFailure(
+        400,
+        'Введите имя без слешей и переносов строк (до 200 знаков).',
+      );
+    }
+    await _call(session, 'createStudent', {'name': trimmed});
   }
 
   Future<Uri> mediaUrl(Session session, String folder, String name) async {

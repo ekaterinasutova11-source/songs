@@ -1,7 +1,7 @@
 import { call, setKey, fileUrl, fileText, uploadFile, reserveFileUrl, storageState } from './api.js?v=selectel1';
 import { groupSongs, variantName, songKey, buildFileName, retitleFileName, parseFileName, AUDIO_EXT } from './parse.js';
 import { NEW_DAYS, NEW_SINCE } from './config.js?v=selectel1';
-import { renderLyrics, editorToMarkup, COLORS } from './lyrics.js';
+import { renderLyrics, editorToMarkup, COLORS, normalizeColor } from './lyrics.js?v=format2';
 import { Metronome, StandaloneMetronome, DRUM_PATTERNS, fitTaps } from './metronome.js?v=mobile1';
 import { detectTempo, TEMPO_VERSION } from './tempo.js?v=metro3';
 import { loadWaveform, drawWaveform } from './waveform.js?v=garden1';
@@ -231,10 +231,7 @@ function renderTeacher(key) {
     },
   });
 
-  const addStudent = () => {
-    const name = prompt('Имя ученика (или название коллектива):');
-    if (name?.trim()) mutate(() => call('createStudent', { name }), `Добавлен: ${name.trim()}`);
-  };
+  const addStudent = () => createStudentDialog();
 
   const total = visible.reduce((n, s) => n + s.songs.length, 0);
   main.replaceChildren(
@@ -253,6 +250,37 @@ function renderTeacher(key) {
     ...(teacherArchive ? [h('p', { class: 'archive-notice' }, 'Доступ учеников закрыт. Все песни, тексты и заметки сохранены. После восстановления прежняя ссылка снова заработает.')] : []),
     search, results, grid,
     h('p', { class: 'muted hint' }, 'Не показывайте эту страницу ученикам: её адрес открывает доступ ко всем песням.'));
+}
+
+function createStudentDialog() {
+  if (document.querySelector('.create-student-dialog')) return;
+  const name = h('input', {class: 'field', name: 'student-name', required: true, maxlength: 200,
+    autocomplete: 'off', autofocus: true, 'aria-label': 'Имя ученика'});
+  const status = h('p', {class: 'dialog-status', role: 'status', 'aria-live': 'polite'});
+  const cancel = h('button', {class: 'btn ghost', type: 'button', onclick: () => dialog.close()}, 'Отмена');
+  const submit = h('button', {class: 'btn primary', type: 'submit'}, 'Добавить ученика');
+  let pending = false;
+  const form = h('form', {onsubmit: async event => {
+    event.preventDefault();
+    if (pending) return;
+    const value = name.value.trim();
+    if (!value) { status.textContent = 'Напишите имя ученика.'; name.focus(); return; }
+    pending = true; submit.disabled = true; cancel.disabled = true; name.disabled = true;
+    status.textContent = 'Добавляю ученика…';
+    try {
+      await call('createStudent', {name: value});
+      dialog.close();
+      toast(`Добавлен: ${value}`);
+      await route(true, true);
+    } catch (error) { status.textContent = error.message || 'Не удалось добавить ученика. Попробуйте ещё раз.'; }
+    finally { pending = false; submit.disabled = false; cancel.disabled = false; name.disabled = false; }
+  }}, h('h2', {id: 'create-student-title'}, 'Новый ученик'),
+  h('label', {class: 'dialog-field'}, 'Имя ученика', name), status,
+  h('div', {class: 'student-actions'}, cancel, submit));
+  const dialog = h('dialog', {class: 'archive-dialog create-student-dialog', 'aria-labelledby': 'create-student-title'}, form);
+  dialog.addEventListener('cancel', event => { if (pending) event.preventDefault(); });
+  dialog.addEventListener('close', () => dialog.remove(), {once: true});
+  document.body.append(dialog); dialog.showModal();
 }
 
 function archiveStudent(student) {
@@ -569,6 +597,28 @@ window.addEventListener('beforeunload', e => {
   if ([...dirtyEditors].some(f => f())) { e.preventDefault(); e.returnValue = ''; }
 });
 
+const brandHome = document.querySelector('.studio-brand');
+brandHome?.addEventListener('click', event => {
+  event.preventDefault();
+  const goHome = () => {
+    dirtyEditors.clear(); openEditor = null;
+    const destination = libraryKey ? `#/${role === 'teacher' ? 't' : 's'}/${libraryKey}` : '#';
+    // Only navigation changes; the shared audio element keeps playing.
+    if (location.hash === destination) { route(false, true); window.scrollTo(0, 0); }
+    else location.hash = destination;
+  };
+  if (![...dirtyEditors].some(isDirty => isDirty())) return goHome();
+  if (document.querySelector('.leave-editor-dialog')) return;
+  const dialog = h('dialog', {class: 'archive-dialog leave-editor-dialog', 'aria-labelledby': 'leave-editor-title'},
+    h('h2', {id: 'leave-editor-title'}, 'Выйти без сохранения?'),
+    h('p', {}, 'В редакторе есть несохранённые изменения. Сначала сохраните их или подтвердите выход на главную.'),
+    h('div', {class: 'student-actions'},
+      h('button', {class: 'btn ghost', autofocus: true, onclick: () => dialog.close()}, 'Продолжить редактирование'),
+      h('button', {class: 'btn primary', onclick: () => { dialog.close(); goHome(); }}, 'Выйти без сохранения')));
+  dialog.addEventListener('close', () => dialog.remove(), {once: true});
+  document.body.append(dialog); dialog.showModal();
+});
+
 const kindSelect = value => h('select', { class: 'field kind', 'aria-label': 'Тип' },
   h('option', { value: 'minus', selected: value === 'minus' }, 'Минус'),
   h('option', { value: 'plus', selected: value === 'plus' }, 'Плюс'),
@@ -590,11 +640,11 @@ function lyricsEditorBox(placeholder = 'Вставьте сюда текст п�
   let savedRange = null;
   document.addEventListener('selectionchange', () => {
     const sel = getSelection();
-    if (sel.rangeCount && area.contains(sel.anchorNode)) savedRange = sel.getRangeAt(0).cloneRange();
+    if (sel.rangeCount && area.contains(sel.getRangeAt(0).commonAncestorContainer)) savedRange = sel.getRangeAt(0).cloneRange();
   });
   const cmd = (name, value) => {
     area.focus();
-    if (savedRange) {
+    if (savedRange && area.contains(savedRange.commonAncestorContainer)) {
       const sel = getSelection();
       sel.removeAllRanges();
       sel.addRange(savedRange);
@@ -610,27 +660,42 @@ function lyricsEditorBox(placeholder = 'Вставьте сюда текст п�
     onclick: e => { e.preventDefault(); action(); },
   }, label);
 
-  const markActive = () => {
-    const sel = getSelection();
-    if (!sel.rangeCount) return false;
-    let n = sel.anchorNode;
-    for (; n && n !== area; n = n.parentNode) {
-      if (n.nodeType === 1 && (n.tagName === 'MARK' || (n.style.backgroundColor && n.style.backgroundColor !== 'transparent'))) return true;
-    }
-    return false;
+  const colorTools = (title, command, palette, initial) => {
+    const picker = h('input', {type: 'color', value: initial, class: 'format-color-picker', 'aria-label': `${title}: выбрать цвет`,
+      onchange: () => { value.value = picker.value; cmd(command, picker.value); }});
+    const value = h('input', {type: 'text', class: 'format-color-value', value: initial,
+      placeholder: '#1a2b3c или rgb(26,43,60)', 'aria-label': `${title}: HEX или RGB`, spellcheck: 'false'});
+    const apply = () => {
+      const hex = normalizeColor(value.value);
+      if (!hex) { toast('Цвет: #1a2b3c или rgb(26, 43, 60). Числа RGB — от 0 до 255.', 'error'); return; }
+      picker.value = hex; value.value = hex; cmd(command, hex);
+    };
+    value.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); apply(); } });
+    return h('fieldset', {class: 'format-color-group'}, h('legend', {}, title),
+      h('div', {class: 'format-color-presets'}, palette.map(color => tool(
+        h('span', {class: 'format-swatch', style: `background-color:${color.hex}`}), `${title}: ${color.name}`,
+        () => { picker.value = color.hex; value.value = color.hex; cmd(command, color.hex); }))),
+      h('div', {class: 'format-color-custom'}, picker, value, tool('Применить', `Применить ${title.toLowerCase()}`, apply)),
+      command === 'hiliteColor' ? tool('Без маркера', 'Убрать только цвет маркера', () => cmd(command, 'transparent'))
+        : tool('Обычный цвет', 'Вернуть обычный цвет букв', () => cmd(command, getComputedStyle(area).color)));
   };
-
   const toolbar = h('div', { class: 'toolbar-fmt' },
-    tool(h('b', {}, 'Ж'), 'Жирный (Ctrl+B)', () => cmd('bold')),
-    tool(h('i', {}, 'К'), 'Курсив (Ctrl+I)', () => cmd('italic')),
-    tool(h('u', {}, 'Ч'), 'Подчёркнутый (Ctrl+U)', () => cmd('underline')),
-    tool(h('mark', {}, 'М'), 'Маркер', () => cmd('hiliteColor', markActive() ? 'transparent' : '#fff176')),
-    h('span', { class: 'tool-sep' }),
-    Object.entries(COLORS).map(([name, c]) =>
-      tool(h('span', { class: `swatch c-${name}` }), c.name, () => cmd('foreColor', c.hex), 'color')),
-    tool('A', 'Обычный цвет', () => cmd('foreColor', getComputedStyle(area).color), 'color plain'),
-    h('span', { class: 'tool-sep' }),
-    tool('⌫', 'Убрать оформление', () => { cmd('removeFormat'); cmd('hiliteColor', 'transparent'); }));
+    h('div', {class: 'format-main'},
+      tool(h('b', {}, 'Жирный'), 'Жирный (Ctrl+B)', () => cmd('bold')),
+      tool(h('i', {}, 'Курсив'), 'Курсив (Ctrl+I)', () => cmd('italic')),
+      tool(h('u', {}, 'Подчеркнуть'), 'Подчёркнутый (Ctrl+U)', () => cmd('underline')),
+      tool('Убрать оформление', 'Убрать оформление', () => { cmd('removeFormat'); cmd('hiliteColor', 'transparent'); })),
+    colorTools('Цвет букв', 'foreColor', [...Object.values(COLORS),
+      {name: 'Оранжевый', hex: '#d84315'}, {name: 'Бирюзовый', hex: '#00796b'},
+      {name: 'Розовый', hex: '#ad1457'}, {name: 'Индиго', hex: '#3949ab'},
+      {name: 'Коричневый', hex: '#795548'}, {name: 'Серый', hex: '#616161'},
+    ], '#7b1fa2'),
+    colorTools('Цвет маркера', 'hiliteColor', [
+      {name: 'Жёлтый', hex: '#fff176'}, {name: 'Зелёный', hex: '#a5d6a7'},
+      {name: 'Голубой', hex: '#90caf9'}, {name: 'Розовый', hex: '#f8bbd0'},
+      {name: 'Сиреневый', hex: '#ce93d8'}, {name: 'Персиковый', hex: '#ffcc80'},
+      {name: 'Мятный', hex: '#80cbc4'}, {name: 'Лимонный', hex: '#e6ee9c'},
+    ], '#fff176'));
 
   const el = h('div', { class: 'lyrics-editor' }, toolbar, area);
   return {

@@ -10,6 +10,8 @@ import 'player.dart';
 import 'brand.dart';
 import 'lyrics.dart';
 import 'ui_settings.dart';
+import 'add_student.dart';
+import 'metronome.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -438,6 +440,56 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
     });
   }
 
+  void _home() {
+    if (_session == null || _library == null || _blocked) return;
+    _textEpoch++;
+    setState(() {
+      _studentId = _session!.isTeacher ? null : _library!.personalSpaceId;
+      _songId = null;
+      _lyrics = null;
+      _lyricsLoading = false;
+      _archive = false;
+      _query = '';
+      _error = null;
+    });
+  }
+
+  Future<void> _addStudent() async {
+    final session = _session;
+    final epoch = _epoch;
+    if (session == null || !session.isTeacher || _blocked) return;
+    final created = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) =>
+          AddStudentDialog(create: (name) => _api.createStudent(session, name)),
+    );
+    if (!mounted || epoch != _epoch) return;
+    if (created == true) {
+      _home();
+      _message('Ученик добавлен');
+    }
+    await _refresh(quiet: true);
+  }
+
+  void _showMetronome() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: true,
+      builder: (context) => ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * .8,
+        ),
+        child: const SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(8, 0, 8, 20),
+          child: MetronomePanel(),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final canBack =
@@ -453,27 +505,35 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
         appBar: AppBar(
           leading: canBack ? BackButton(onPressed: _back) : null,
           titleSpacing: canBack ? 0 : 20,
-          title: LayoutBuilder(
-            builder: (context, constraints) {
-              // Leave navigation and Aa/logout reachable on narrow screens at
-              // large interface scale instead of overflowing the brand mark.
-              if (constraints.maxWidth < 40) return const SizedBox.shrink();
-              return Row(
-                children: [
-                  const GardenMark(size: 27),
-                  const SizedBox(width: 8),
-                  Flexible(
-                    child: Text(
-                      'Сад звука',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.headlineMedium
-                          ?.copyWith(fontFamily: 'Cormorant', fontSize: 27),
-                    ),
-                  ),
-                ],
-              );
-            },
+          title: InkWell(
+            onTap: _home,
+            borderRadius: BorderRadius.circular(10),
+            child: Semantics(
+              button: true,
+              label: 'На главную',
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  // Leave navigation and Aa/logout reachable on narrow screens at
+                  // large interface scale instead of overflowing the brand mark.
+                  if (constraints.maxWidth < 40) return const SizedBox.shrink();
+                  return Row(
+                    children: [
+                      const GardenMark(size: 27),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          'Сад звука',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.headlineMedium
+                              ?.copyWith(fontFamily: 'Cormorant', fontSize: 27),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
           ),
           actions: [
             IconButton(
@@ -504,6 +564,17 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
               ? _statusView()
               : Column(
                   children: [
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          onPressed: _showMetronome,
+                          icon: const Icon(Icons.timer_outlined),
+                          label: const Text('Метроном'),
+                        ),
+                      ),
+                    ),
                     if (_error != null)
                       MaterialBanner(
                         content: Text(_error!),
@@ -660,6 +731,18 @@ class _LibraryHomeState extends State<LibraryHome> with WidgetsBindingObserver {
           if (student?.isArchived == true)
             const Text('В архиве · ученику доступ закрыт'),
           const SizedBox(height: 20),
+          if (student == null && _session?.isTeacher == true)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: FilledButton.icon(
+                  onPressed: _addStudent,
+                  icon: const Icon(Icons.person_add_alt_1),
+                  label: const Text('Добавить ученика'),
+                ),
+              ),
+            ),
           if (student == null && _session?.isTeacher == true)
             Padding(
               padding: const EdgeInsets.only(bottom: 16),

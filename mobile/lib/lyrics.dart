@@ -8,27 +8,33 @@ class LyricRun {
     this.italic,
     this.underline,
     this.marked,
-    this.color,
-  );
+    this.color, [
+    this.highlight,
+  ]);
   String text;
   final bool bold, italic, underline, marked;
   final String? color;
+  final String? highlight;
   bool sameStyle(LyricRun other) =>
       bold == other.bold &&
       italic == other.italic &&
       underline == other.underline &&
       marked == other.marked &&
-      color == other.color;
+      color == other.color &&
+      highlight == other.highlight;
 }
 
 List<LyricRun> parseLyrics(String markup) {
   final token = RegExp(
-    r'\\([\s\S])|\*\*|\*|__|==|\[(\/?)(red|blue|green|purple)\]|[^\\*_=\[]+|[\s\S]',
+    r'\\([\s\S])|\*\*|\*|__|==|\[(\/?)(red|blue|green|purple|color(?:=#[\da-fA-F]{6})?|mark(?:=#[\da-fA-F]{6})?)\]|[^\\*_=\[]+|[\s\S]',
   );
   final tokens = token.allMatches(markup).toList();
   final runs = <LyricRun>[];
   var bold = false, italic = false, underline = false, marked = false;
   String? color;
+  String? highlight;
+  final colors = <({String tag, String? previous})>[];
+  final highlights = <String?>[];
   bool whitespace(String text) => RegExp(r'\s').hasMatch(text);
   bool canClose(int index) => !whitespace(
     tokens[index].start > 0 ? markup[tokens[index].start - 1] : ' ',
@@ -43,7 +49,15 @@ List<LyricRun> parseLyrics(String markup) {
   }
 
   void push(String text) {
-    final run = LyricRun(text, bold, italic, underline, marked, color);
+    final run = LyricRun(
+      text,
+      bold,
+      italic,
+      underline,
+      marked,
+      color,
+      highlight,
+    );
     if (runs.isNotEmpty && runs.last.sameStyle(run)) {
       runs.last.text += text;
     } else {
@@ -77,10 +91,26 @@ List<LyricRun> parseLyrics(String markup) {
         case '==':
           marked = !marked;
       }
-    } else if (match[3] != null && match[2] == '') {
-      color = match[3];
-    } else if (match[3] != null && match[2] == '/' && color == match[3]) {
-      color = null;
+    } else if (match[3] != null &&
+        match[2] == '' &&
+        (const ['red', 'blue', 'green', 'purple'].contains(match[3]) ||
+            match[3]!.startsWith('color='))) {
+      final tag = match[3]!;
+      colors.add((
+        tag: tag.startsWith('color=') ? 'color' : tag,
+        previous: color,
+      ));
+      color = tag.startsWith('color=') ? tag.substring(6).toLowerCase() : tag;
+    } else if (match[3] != null &&
+        match[2] == '/' &&
+        colors.isNotEmpty &&
+        colors.last.tag == match[3]) {
+      color = colors.removeLast().previous;
+    } else if (match[3]?.startsWith('mark=') == true && match[2] == '') {
+      highlights.add(highlight);
+      highlight = match[3]!.substring(5).toLowerCase();
+    } else if (match[3] == 'mark' && match[2] == '/' && highlights.isNotEmpty) {
+      highlight = highlights.removeLast();
     } else {
       push(text);
     }
@@ -107,6 +137,11 @@ class FormattedLyrics extends StatelessWidget {
             'green': const Color(0xff2e7d32),
             'purple': const Color(0xff7b1fa2),
           };
+    Color? customColor(String? hex) {
+      if (hex == null || !RegExp(r'^#[\da-f]{6}$').hasMatch(hex)) return null;
+      return Color(0xff000000 | int.parse(hex.substring(1), radix: 16));
+    }
+
     return SelectableText.rich(
       TextSpan(
         children: [
@@ -119,12 +154,10 @@ class FormattedLyrics extends StatelessWidget {
                 decoration: run.underline
                     ? TextDecoration.underline
                     : TextDecoration.none,
-                backgroundColor: run.marked
-                    ? Color(dark ? 0xff6b5d12 : 0xfffff176)
-                    : null,
-                color: run.marked
-                    ? Color(dark ? 0xfffff8d6 : 0xff22201c)
-                    : palette[run.color],
+                backgroundColor:
+                    customColor(run.highlight) ??
+                    (run.marked ? Color(dark ? 0xff6b5d12 : 0xfffff176) : null),
+                color: customColor(run.color) ?? palette[run.color],
               ),
             ),
         ],
